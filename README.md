@@ -59,9 +59,10 @@ is the largest of them:
   are downloaded, so the data keeps improving for every user.
 
 The server is a Cloudflare Worker in the `server` directory; see its README
-to deploy one, then put its URL in `NpcPermadeathConfig.DEFAULT_SYNC_URL`.
-Only NPC names and tile coordinates are sent, but the request naturally
-carries your IP address, which is why the setting says so.
+to deploy one, then enter its URL in the settings (or bake it into
+`NpcPermadeathConfig.DEFAULT_SYNC_URL`). Only NPC names and tile
+coordinates are sent, but the request naturally carries your IP address,
+which is why the setting says so. Sharing is off until a URL is set.
 
 ## Settings
 
@@ -88,8 +89,8 @@ carries your IP address, which is why the setting says so.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Share spawn data | on | Upload spawn tiles you observe and download everyone else's. Sends your IP address to the community server. |
-| Server URL | built in | Change only if you run your own server. |
+| Share spawn data | off | Upload spawn tiles you observe and download everyone else's. Sends your IP address to the community server. |
+| Server URL | blank | The community server to share with; blank keeps sharing off. See the `server` directory to run one. |
 
 *Forget all slain NPCs* brings everything back and unticks itself. Chat
 commands: `::permadeath` shows the tallies for the area you are standing in,
@@ -103,9 +104,8 @@ is regenerated from the wiki with `python tools/generate_bosses.py`.
 - Hidden NPCs that are aggressive can still attack you. With *Reveal NPCs
   attacking you* on, the attacker pops back into view and a different NPC
   takes its place in the hidden count.
-- Areas are map chunks under the hood. Kills are credited to a neighbouring
-  chunk only once the wiki data for that NPC has been fetched, so the very
-  first kill of a new NPC type near a border may sit in its own chunk.
+- Areas are 64x64 map chunks under the hood, so the same NPC type in two
+  adjacent chunks is tracked separately.
 - Hidden choices that have not been seen for two weeks are dropped and refilled
   from whatever is in view, so the count stays right after game updates.
 - Loot hiding covers the item models and the right-click options. Other

@@ -3,8 +3,6 @@ package com.npcpermadeath;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 import net.runelite.api.Point;
 import net.runelite.api.TileItem;
 import net.runelite.api.coords.WorldPoint;
@@ -20,10 +18,7 @@ public class LootWatcherTest
 
 	private static TileItem item(int id, int ownership)
 	{
-		TileItem item = mock(TileItem.class);
-		when(item.getId()).thenReturn(id);
-		when(item.getOwnership()).thenReturn(ownership);
-		return item;
+		return new FakeTileItem(id, ownership);
 	}
 
 	@Test

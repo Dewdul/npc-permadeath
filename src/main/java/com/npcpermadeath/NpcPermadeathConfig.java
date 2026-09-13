@@ -10,8 +10,12 @@ public interface NpcPermadeathConfig extends Config
 {
 	String GROUP = "npcpermadeath";
 	String KEY_FORGET_ALL = "forgetAll";
-	/** Community spawn server; see the server directory for how to deploy one. */
-	String DEFAULT_SYNC_URL = "https://npc-permadeath-spawns.REPLACE-ME.workers.dev";
+	/**
+	 * Community spawn server; see the server directory for how to deploy one.
+	 * Empty until one is running, which disables sharing regardless of the
+	 * toggle.
+	 */
+	String DEFAULT_SYNC_URL = "";
 
 	@ConfigSection(
 		name = "Which NPCs count",
@@ -146,19 +150,19 @@ public interface NpcPermadeathConfig extends Config
 		keyName = "shareSpawns",
 		name = "Share spawn data",
 		description = "Upload the spawn tiles you see NPCs respawn on and download everyone else's, so totals exist even where the wiki has none. "
-			+ "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers.",
+			+ "Needs a server URL below. This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers.",
 		section = communitySection,
 		position = 26
 	)
 	default boolean shareSpawns()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
 		keyName = "syncUrl",
 		name = "Server URL",
-		description = "The community spawn server to use. Leave as is unless you run your own.",
+		description = "The community spawn server to share with. Blank means sharing is off. See the server directory of the plugin repository to run one.",
 		section = communitySection,
 		position = 27
 	)
