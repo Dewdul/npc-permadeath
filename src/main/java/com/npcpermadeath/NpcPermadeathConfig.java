@@ -23,8 +23,8 @@ public interface NpcPermadeathConfig extends Config
 
 	@ConfigItem(
 		keyName = "rememberSpawns",
-		name = "Remember between sessions",
-		description = "Learn each slain NPC's spawn tile when it respawns and keep it hidden on later logins and other worlds. Saved per account.",
+		name = "Learn spawn tiles",
+		description = "When a slain NPC is seen respawning, also remember its spawn tile so the same spawn stays hidden even if the server renumbers NPCs.",
 		position = 1
 	)
 	default boolean rememberSpawns()
@@ -33,10 +33,21 @@ public interface NpcPermadeathConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "acrossWorlds",
+		name = "Apply on every world",
+		description = "Kills are remembered by NPC number. On, that number hides the matching NPC on any world; off, only on the world you killed it on.",
+		position = 2
+	)
+	default boolean acrossWorlds()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "npcNames",
 		name = "Only these NPCs",
 		description = "Comma-separated NPC names this applies to (wildcards * allowed). Leave blank for every NPC.",
-		position = 2
+		position = 3
 	)
 	default String npcNames()
 	{
@@ -47,7 +58,7 @@ public interface NpcPermadeathConfig extends Config
 		keyName = KEY_FORGET_ALL,
 		name = "Forget all slain NPCs",
 		description = "Tick to bring every hidden NPC back and clear the saved list. Unticks itself.",
-		position = 3
+		position = 4
 	)
 	default boolean forgetAll()
 	{

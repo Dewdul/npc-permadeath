@@ -2,6 +2,7 @@ package com.npcpermadeath;
 
 import com.google.inject.Provides;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
@@ -40,12 +41,14 @@ import net.runelite.client.util.WildcardMatcher;
 )
 public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 {
+	static final String KEY_HIDDEN_NPCS = "hiddenNpcs";
 	static final String KEY_CULLED_SPAWNS = "culledSpawns";
 
 	/** NPCs walking into view appear about 15 tiles out; a respawn is closer. */
 	private static final int LEARN_MAX_DISTANCE = 13;
 	/** Moving further than this in one tick means the player teleported. */
 	private static final int TELEPORT_DISTANCE = 2;
+	private static final int NPC_LIST_LIMIT = 12;
 
 	@Inject
 	private Client client;
@@ -78,13 +81,13 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	protected void startUp()
 	{
 		nameFilter = parseNames(config.npcNames());
+		tracker.setAcrossWorlds(config.acrossWorlds());
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
 			if (client.getGameState() == GameState.LOGGED_IN)
 			{
-				currentWorld = client.getWorld();
-				loadCulledSpawns();
+				enterWorld(client.getWorld());
 			}
 		});
 	}
@@ -136,7 +139,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			handleDeath(npc);
 		}
-		tracker.recordDespawn(npc.getIndex());
+		if (tracker.recordDespawn(npc.getIndex(), npc.getId()))
+		{
+			log.debug("{} (id {}, index {}) is now permanently dead", npc.getName(), npc.getId(), npc.getIndex());
+			saveState();
+		}
 	}
 
 	private void handleDeath(NPC npc)
@@ -148,10 +155,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 		Player local = client.getLocalPlayer();
 		boolean killedByMe = tracker.wasDamagedByMe(index) || (local != null && npc.getInteracting() == local);
-		if (tracker.recordDeath(index, npc.getId(), killedByMe, config.onlyMyKills(), client.getTickCount()))
-		{
-			log.debug("Tracking death of {} (id {}, index {})", npc.getName(), npc.getId(), index);
-		}
+		tracker.recordDeath(index, npc.getId(), killedByMe, config.onlyMyKills(), client.getTickCount());
 	}
 
 	@Subscribe
@@ -169,9 +173,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			log.debug("Hiding {} (id {}, index {}): {}", npc.getName(), npc.getId(), npc.getIndex(), result.getOutcome());
 		}
-		if (result.isLearned())
+		if (result.isChanged())
 		{
-			saveCulledSpawns();
+			saveState();
 		}
 	}
 
@@ -209,17 +213,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		switch (event.getGameState())
 		{
 			case LOGGED_IN:
-				if (client.getWorld() != currentWorld)
-				{
-					// NPC indices only mean something within one world.
-					tracker.clearRuntime();
-					currentWorld = client.getWorld();
-				}
-				loadCulledSpawns();
+				enterWorld(client.getWorld());
 				break;
 			case HOPPING:
 			case LOGIN_SCREEN:
-				tracker.clearRuntime();
+				tracker.clearSession();
 				lastPlayerLocation = null;
 				currentWorld = -1;
 				break;
@@ -228,10 +226,22 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 	}
 
+	private void enterWorld(int world)
+	{
+		if (world != currentWorld)
+		{
+			// In-flight deaths only mean something on the world they happened on.
+			tracker.clearSession();
+			currentWorld = world;
+		}
+		tracker.setCurrentWorld(world);
+		loadState();
+	}
+
 	@Subscribe
 	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
 	{
-		clientThread.invoke(this::loadCulledSpawns);
+		clientThread.invoke(this::loadState);
 	}
 
 	@Subscribe
@@ -241,14 +251,23 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		if ("npcNames".equals(event.getKey()))
+		switch (event.getKey())
 		{
-			nameFilter = parseNames(config.npcNames());
-		}
-		else if (NpcPermadeathConfig.KEY_FORGET_ALL.equals(event.getKey()) && config.forgetAll())
-		{
-			configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
-			clientThread.invoke(this::forgetAll);
+			case "npcNames":
+				nameFilter = parseNames(config.npcNames());
+				break;
+			case "acrossWorlds":
+				tracker.setAcrossWorlds(config.acrossWorlds());
+				break;
+			case NpcPermadeathConfig.KEY_FORGET_ALL:
+				if (config.forgetAll())
+				{
+					configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
+					clientThread.invoke(this::forgetAll);
+				}
+				break;
+			default:
+				break;
 		}
 	}
 
@@ -260,53 +279,103 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			return;
 		}
 		String[] args = event.getArguments();
-		if (args.length > 0 && "reset".equalsIgnoreCase(args[0]))
+		String sub = args.length > 0 ? args[0].toLowerCase() : "";
+		switch (sub)
 		{
-			forgetAll();
+			case "reset":
+				forgetAll();
+				break;
+			case "npcs":
+				listNearbyNpcs();
+				break;
+			default:
+				message("NPC Permadeath: " + tracker.hiddenCount() + " slain NPC(s) remembered, "
+					+ tracker.getCulledSpawns().size() + " spawn tile(s) learned. "
+					+ "::permadeath npcs lists nearby NPC indices, ::permadeath reset forgets everything.");
+				break;
+		}
+	}
+
+	/** Prints nearby NPCs with their indices, for checking index stability between worlds. */
+	private void listNearbyNpcs()
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null)
+		{
 			return;
 		}
-		message("NPC Permadeath: " + tracker.hiddenCount() + " NPC(s) hidden on this world, "
-			+ tracker.getCulledSpawns().size() + " spawn point(s) remembered. ::permadeath reset forgets them all.");
+		WorldPoint here = local.getWorldLocation();
+		List<NPC> npcs = new ArrayList<>();
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc.getName() != null && npc.getWorldLocation() != null)
+			{
+				npcs.add(npc);
+			}
+		}
+		npcs.sort(Comparator.comparingInt(n -> n.getWorldLocation().distanceTo(here)));
+		if (npcs.size() > NPC_LIST_LIMIT)
+		{
+			npcs = npcs.subList(0, NPC_LIST_LIMIT);
+		}
+		message("World " + client.getWorld() + ", nearest NPCs (name, id, index, tile):");
+		for (NPC npc : npcs)
+		{
+			WorldPoint p = npc.getWorldLocation();
+			String hidden = tracker.isHidden(npc.getIndex(), npc.getId()) ? " [hidden]" : "";
+			message(Text.removeTags(npc.getName()) + " id " + npc.getId() + " #" + npc.getIndex()
+				+ " @ " + p.getX() + "," + p.getY() + "," + p.getPlane() + hidden);
+		}
 	}
 
 	private void forgetAll()
 	{
 		tracker.clearAll();
-		saveCulledSpawns();
+		saveState();
 		message("NPC Permadeath: all slain NPCs forgotten.");
 	}
 
-	private void loadCulledSpawns()
+	private void loadState()
 	{
-		String stored = configManager.getRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_CULLED_SPAWNS);
+		tracker.loadHidden(loadList(KEY_HIDDEN_NPCS));
 		List<SpawnKey> spawns = new ArrayList<>();
-		if (stored != null)
+		for (String entry : loadList(KEY_CULLED_SPAWNS))
 		{
-			for (String entry : Text.fromCSV(stored))
+			SpawnKey key = SpawnKey.parse(entry);
+			if (key != null)
 			{
-				SpawnKey key = SpawnKey.parse(entry);
-				if (key != null)
-				{
-					spawns.add(key);
-				}
+				spawns.add(key);
 			}
 		}
 		tracker.setCulledSpawns(spawns);
-		log.debug("Loaded {} remembered spawn points", spawns.size());
+		log.debug("Loaded {} slain NPCs and {} spawn tiles", tracker.hiddenCount(), spawns.size());
 	}
 
-	private void saveCulledSpawns()
+	private List<String> loadList(String key)
 	{
-		if (tracker.getCulledSpawns().isEmpty())
-		{
-			configManager.unsetRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_CULLED_SPAWNS);
-			return;
-		}
-		String csv = tracker.getCulledSpawns().stream()
+		String stored = configManager.getRSProfileConfiguration(NpcPermadeathConfig.GROUP, key);
+		return stored == null ? new ArrayList<>() : Text.fromCSV(stored);
+	}
+
+	private void saveState()
+	{
+		saveList(KEY_HIDDEN_NPCS, tracker.serializeHidden());
+		saveList(KEY_CULLED_SPAWNS, tracker.getCulledSpawns().stream()
 			.map(SpawnKey::serialize)
 			.sorted()
-			.collect(Collectors.joining(","));
-		configManager.setRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_CULLED_SPAWNS, csv);
+			.collect(Collectors.toList()));
+	}
+
+	private void saveList(String key, List<String> entries)
+	{
+		if (entries.isEmpty())
+		{
+			configManager.unsetRSProfileConfiguration(NpcPermadeathConfig.GROUP, key);
+		}
+		else
+		{
+			configManager.setRSProfileConfiguration(NpcPermadeathConfig.GROUP, key, String.join(",", entries));
+		}
 	}
 
 	private boolean matchesFilter(String npcName)
