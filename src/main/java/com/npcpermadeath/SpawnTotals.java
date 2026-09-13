@@ -164,49 +164,6 @@ class SpawnTotals
 	}
 
 	/**
-	 * Regions of this NPC's spawns that the wiki files under the given place,
-	 * or an empty set if the place is not one of the NPC's own labels.
-	 */
-	Set<Integer> regionsOfPlace(String name, String place)
-	{
-		Set<Integer> out = new HashSet<>();
-		Cached cached = cache.get(name);
-		if (cached != null)
-		{
-			cached.labelByRegion.forEach((region, label) ->
-			{
-				if (label.equals(place))
-				{
-					out.add(region);
-				}
-			});
-		}
-		return out;
-	}
-
-	/** Total spawns of the NPC across every region the wiki files under the place, or null if unknown. */
-	Integer totalForPlace(String name, String place)
-	{
-		Cached cached = cache.get(name);
-		if (cached == null)
-		{
-			return null;
-		}
-		int sum = 0;
-		boolean any = false;
-		for (int region : regionsOfPlace(name, place))
-		{
-			Integer n = cached.byRegion.get(region);
-			if (n != null)
-			{
-				sum += n;
-				any = true;
-			}
-		}
-		return any ? sum : null;
-	}
-
-	/**
 	 * When a kill lands in a region the wiki has no spawns of this NPC in, the
 	 * NPC most likely wandered over from next door. Returns the neighbouring
 	 * region with the most spawns, or the region itself when nothing better

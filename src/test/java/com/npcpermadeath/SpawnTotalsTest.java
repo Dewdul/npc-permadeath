@@ -69,9 +69,6 @@ public class SpawnTotalsTest
 
 		assertEquals("Lumbridge", totals.label("Goblin", LUMBRIDGE));
 		assertEquals("Lumbridge", totals.label("Goblin", west));
-		assertEquals(Integer.valueOf(3), totals.totalForPlace("Goblin", "Lumbridge"));
-		assertEquals(2, totals.regionsOfPlace("Goblin", "Lumbridge").size());
-		assertNull(totals.totalForPlace("Goblin", "Nowhere"));
 		// A kill just over the border, where the wiki has no goblins, belongs to Lumbridge.
 		assertEquals(LUMBRIDGE, totals.homeRegion("Goblin", east));
 		assertEquals(LUMBRIDGE, totals.homeRegion("Goblin", LUMBRIDGE));

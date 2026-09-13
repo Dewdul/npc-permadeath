@@ -132,7 +132,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		ignoredNames = parseNames(config.ignoredNames());
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
-		panel = new PermadeathPanel(areas -> clientThread.invoke(() -> forgetPlace(areas)));
+		panel = new PermadeathPanel(area -> clientThread.invoke(() -> forgetArea(area)));
 		navButton = NavigationButton.builder()
 			.tooltip("NPC Permadeath")
 			.icon(ImageUtil.loadImageResource(getClass(), "panel_icon.png"))
@@ -535,8 +535,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		message("NPC Permadeath, " + placeName(new AreaKey("", region)) + ":");
 		kills.forEach((name, count) ->
 		{
-			Tally tally = tallyFor(new AreaKey(name, region));
-			message(name + ": " + tally.getKills() + totalSuffix(tally) + " slain, " + tally.getHiddenHere() + " hidden here");
+			AreaKey area = new AreaKey(name, region);
+			message(name + ": " + count + totalSuffix(area) + " slain, " + tracker.hiddenHere(area) + " hidden here");
 		});
 	}
 
@@ -546,19 +546,12 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		return label != null ? label : "Region " + area.getRegion();
 	}
 
-	private void forgetPlace(List<AreaKey> areas)
+	private void forgetArea(AreaKey area)
 	{
-		for (AreaKey area : areas)
-		{
-			tracker.forgetArea(area);
-		}
+		tracker.forgetArea(area);
 		saveState();
 		refreshPanel();
-		if (!areas.isEmpty())
-		{
-			AreaKey first = areas.get(0);
-			message("NPC Permadeath: " + first.getName() + " in " + placeName(first) + " forgotten.");
-		}
+		message("NPC Permadeath: " + area.getName() + " in " + placeName(area) + " forgotten.");
 	}
 
 	/** Snapshots the kill list on the client thread and hands it to the panel on the Swing thread. */
@@ -570,18 +563,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			return;
 		}
 		List<PermadeathPanel.Row> rows = new ArrayList<>();
-		Set<AreaKey> covered = new HashSet<>();
-		for (AreaKey area : tracker.killsByArea().keySet())
-		{
-			if (covered.contains(area))
-			{
-				continue;
-			}
-			Tally tally = tallyFor(area);
-			covered.addAll(tally.getAreas());
-			rows.add(new PermadeathPanel.Row(area.getName(), placeName(area), tally.getAreas(),
-				tally.getKills(), tally.getTotal(), tally.getHiddenHere()));
-		}
+		tracker.killsByArea().forEach((area, kills) -> rows.add(new PermadeathPanel.Row(
+			area, placeName(area), kills, totals.get(area.getName(), area.getRegion()), tracker.hiddenHere(area))));
 		SwingUtilities.invokeLater(() -> target.update(rows));
 	}
 
@@ -591,58 +574,13 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		Tally tally = tallyFor(area);
-		String where = tally.getPlace() == null ? "this area" : tally.getPlace();
-		message(area.getName() + ": " + tally.getKills() + totalSuffix(tally) + " slain in " + where);
+		message(area.getName() + ": " + tracker.kills(area) + totalSuffix(area) + " slain in this area");
 	}
 
-	private static String totalSuffix(Tally tally)
+	private String totalSuffix(AreaKey area)
 	{
-		return tally.getTotal() == null ? "" : " of " + tally.getTotal();
-	}
-
-	/** Kills and spawns of one NPC across every region the wiki files under the same place. */
-	@Value
-	static class Tally
-	{
-		/** Wiki place name, or null when only the raw region is known. */
-		String place;
-		List<AreaKey> areas;
-		int kills;
-		Integer total;
-		int hiddenHere;
-	}
-
-	private Tally tallyFor(AreaKey area)
-	{
-		String place = totals.label(area.getName(), area.getRegion());
-		Set<Integer> regions = new HashSet<>();
-		if (place != null)
-		{
-			regions.addAll(totals.regionsOfPlace(area.getName(), place));
-		}
-		regions.add(area.getRegion());
-		List<AreaKey> areas = new ArrayList<>();
-		int kills = 0;
-		int hidden = 0;
-		for (int region : regions)
-		{
-			AreaKey key = new AreaKey(area.getName(), region);
-			int n = tracker.kills(key);
-			if (n > 0)
-			{
-				areas.add(key);
-				kills += n;
-				hidden += tracker.hiddenHere(key);
-			}
-		}
-		Integer total = place == null ? totals.get(area.getName(), area.getRegion())
-			: totals.totalForPlace(area.getName(), place);
-		if (total == null)
-		{
-			total = totals.get(area.getName(), area.getRegion());
-		}
-		return new Tally(place, areas, kills, total, hidden);
+		Integer total = totals.get(area.getName(), area.getRegion());
+		return total == null ? "" : " of " + total;
 	}
 
 	private void forgetAll()

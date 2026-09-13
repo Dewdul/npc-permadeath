@@ -20,16 +20,18 @@ Which individuals get hidden:
   into view, until the count is met. Choices are sticky, so the same NPCs stay
   hidden as you walk around and between sessions.
 
-After each kill the chat shows the tally, e.g. `Goblin: 12 of 121 slain in
-Lumbridge`. The place name and total come from the location table on the
-NPC's OSRS Wiki page, looked up once per NPC name and cached for a week.
-Chunks the wiki files under the same place are reported together, and a kill
-that lands in a chunk the wiki has no spawns in (an NPC that wandered over a
-border) is credited to the neighbouring chunk that has them. This is display
-only; the hiding works without it.
+After each kill the chat shows the tally for that chunk, e.g. `Goblin: 12 of
+53 slain in this area`. The total and the place name shown in the panel come
+from the location table on the NPC's OSRS Wiki page, looked up once per NPC
+name and cached for a week. A kill that lands in a chunk the wiki has no
+spawns in (an NPC that wandered over a border) is credited to the
+neighbouring chunk that has them. This is display only; the hiding works
+without it.
 
-The sidebar panel (tombstone icon) lists everything slain, grouped by place,
-with an `x` on each row to forget those kills and bring the NPCs back.
+The sidebar panel (tombstone icon) lists everything slain, one heading per
+chunk named after the wiki place (with the chunk's map coordinates when a
+place spans several chunks), with an `x` on each row to forget those kills
+and bring the NPCs back.
 
 ## Settings
 

@@ -25,25 +25,24 @@ import net.runelite.client.ui.PluginPanel;
 /** Sidebar list of everything slain, grouped by place. */
 class PermadeathPanel extends PluginPanel
 {
-	/** One NPC type in one place. */
+	/** One NPC type in one map chunk. */
 	@Value
 	static class Row
 	{
-		String name;
+		AreaKey area;
+		/** Wiki place name for the chunk, or a fallback. */
 		String place;
-		/** Every map region that feeds this row. */
-		List<AreaKey> areas;
 		int kills;
 		/** Spawns in the area per the wiki, or null if unknown. */
 		Integer total;
 		int hiddenHere;
 	}
 
-	private final Consumer<List<AreaKey>> onForget;
+	private final Consumer<AreaKey> onForget;
 	private final JLabel summary = new JLabel();
 	private final JPanel list = new JPanel();
 
-	PermadeathPanel(Consumer<List<AreaKey>> onForget)
+	PermadeathPanel(Consumer<AreaKey> onForget)
 	{
 		super(false);
 		this.onForget = onForget;
@@ -85,16 +84,27 @@ class PermadeathPanel extends PluginPanel
 		}
 		else
 		{
-			summary.setText(totalKills + " slain across " + countPlaces(rows) + " place" + (countPlaces(rows) == 1 ? "" : "s"));
-			Map<String, List<Row>> byPlace = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+			summary.setText(totalKills + " slain across " + countPlaces(rows) + " chunk" + (countPlaces(rows) == 1 ? "" : "s"));
+			Map<String, java.util.Set<Integer>> chunksPerPlace = new java.util.HashMap<>();
 			for (Row row : rows)
 			{
-				byPlace.computeIfAbsent(row.getPlace(), p -> new java.util.ArrayList<>()).add(row);
+				chunksPerPlace.computeIfAbsent(row.getPlace().toLowerCase(), p -> new java.util.HashSet<>())
+					.add(row.getArea().getRegion());
 			}
-			byPlace.forEach((place, placeRows) ->
+			Map<String, List<Row>> byChunk = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+			for (Row row : rows)
+			{
+				String heading = row.getPlace();
+				if (chunksPerPlace.get(row.getPlace().toLowerCase()).size() > 1)
+				{
+					heading += " " + chunkCorner(row.getArea().getRegion());
+				}
+				byChunk.computeIfAbsent(heading, p -> new java.util.ArrayList<>()).add(row);
+			}
+			byChunk.forEach((place, placeRows) ->
 			{
 				list.add(placeHeader(place));
-				placeRows.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+				placeRows.sort((a, b) -> a.getArea().getName().compareToIgnoreCase(b.getArea().getName()));
 				for (Row row : placeRows)
 				{
 					list.add(rowPanel(row));
@@ -108,7 +118,13 @@ class PermadeathPanel extends PluginPanel
 
 	private static long countPlaces(List<Row> rows)
 	{
-		return rows.stream().map(Row::getPlace).map(String::toLowerCase).distinct().count();
+		return rows.stream().map(r -> r.getArea().getRegion()).distinct().count();
+	}
+
+	/** The south-west world coordinate of a chunk, to tell chunks of the same place apart. */
+	private static String chunkCorner(int region)
+	{
+		return "(" + ((region >> 8) << 6) + ", " + ((region & 0xff) << 6) + ")";
 	}
 
 	private static JLabel placeHeader(String place)
@@ -134,7 +150,7 @@ class PermadeathPanel extends PluginPanel
 		c.insets = new Insets(0, 0, 0, 4);
 		c.anchor = GridBagConstraints.WEST;
 
-		JLabel name = new JLabel(row.getName());
+		JLabel name = new JLabel(row.getArea().getName());
 		name.setFont(FontManager.getRunescapeSmallFont());
 		name.setForeground(java.awt.Color.WHITE);
 		c.gridx = 0;
@@ -162,7 +178,7 @@ class PermadeathPanel extends PluginPanel
 		forget.setToolTipText("Forget these kills and bring them back");
 		forget.setMargin(new Insets(0, 4, 0, 4));
 		forget.setFocusPainted(false);
-		forget.addActionListener(e -> onForget.accept(row.getAreas()));
+		forget.addActionListener(e -> onForget.accept(row.getArea()));
 		c.gridx = 2;
 		c.insets = new Insets(0, 0, 0, 0);
 		panel.add(forget, c);
