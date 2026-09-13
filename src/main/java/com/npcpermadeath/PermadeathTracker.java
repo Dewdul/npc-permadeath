@@ -155,19 +155,10 @@ class PermadeathTracker
 		return tally.mine > tally.others || (tally.mine == tally.others && tally.firstHitMine);
 	}
 
-	/**
-	 * Marks an NPC as slain. It is counted once it despawns.
-	 *
-	 * @return true if the death is now being tracked
-	 */
-	boolean recordDeath(int index, int npcId, String name, int region, boolean killedByMe, boolean requireMine, int tick)
+	/** Marks an NPC as dying; the death is taken for a decision when it despawns. */
+	void recordDeath(int index, int npcId, String name, int region, int tick)
 	{
-		if (requireMine && !killedByMe)
-		{
-			return false;
-		}
 		pending.put(index, new PendingDeath(npcId, name, region, tick));
-		return true;
 	}
 
 	boolean isPending(int index)
@@ -176,28 +167,47 @@ class PermadeathTracker
 	}
 
 	/**
-	 * Counts the kill if this despawn is a tracked death.
+	 * Takes the pending death for a despawning NPC so the caller can decide
+	 * whether it counts.
 	 *
-	 * @return the area the kill was counted in, or null if nothing was counted
+	 * @return the death, or null if this NPC was not dying
 	 */
-	AreaKey recordDespawn(int index, int npcId, long now)
+	PendingDeath takeDeath(int index, int npcId)
 	{
-		damage.remove(index);
-		PendingDeath death = pending.remove(index);
+		PendingDeath death = pending.get(index);
 		if (death == null || death.getNpcId() != npcId)
 		{
 			return null;
 		}
+		pending.remove(index);
+		return death;
+	}
+
+	/** Drops everything in flight for an NPC that left without being counted. */
+	void forget(int index)
+	{
+		damage.remove(index);
+		pending.remove(index);
+	}
+
+	/**
+	 * Counts a kill and hides the NPC.
+	 *
+	 * @return the area the kill was counted in, or null if it was already hidden
+	 */
+	AreaKey countKill(int index, int npcId, String name, int region, long now)
+	{
+		damage.remove(index);
 		HiddenNpc existing = here().get(index);
 		if (existing != null)
 		{
-			// It was already one of ours (hidden and killed by someone else).
+			// It was already one of ours (hidden and killed again, e.g. by a cannon).
 			existing.lastSeen = now;
 			return null;
 		}
-		AreaKey key = new AreaKey(death.getName(), death.getRegion());
+		AreaKey key = new AreaKey(name, region);
 		kills.merge(key, 1, Integer::sum);
-		put(new HiddenNpc(index, npcId, currentWorld, death.getName(), death.getRegion(), now));
+		put(new HiddenNpc(index, npcId, currentWorld, name, region, now));
 		dirty = true;
 		return key;
 	}

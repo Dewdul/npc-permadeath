@@ -28,7 +28,7 @@ public interface NpcPermadeathConfig extends Config
 	@ConfigItem(
 		keyName = "onlyMyKills",
 		name = "Only your kills",
-		description = "Only count NPCs whose kill would be yours: you dealt the most damage (ties go to whoever hit first), the same rule the game uses for loot. When off, every NPC you see die counts.",
+		description = "Only count kills that were yours: your loot dropped from it, or, for NPCs that drop nothing, you dealt the most damage. When off, every NPC you see die counts.",
 		section = whichSection,
 		position = 11
 	)

@@ -28,8 +28,10 @@ public class PermadeathTrackerTest
 	private void kill(int index)
 	{
 		tracker.recordHit(index, 5, true);
-		assertTrue(tracker.recordDeath(index, GOBLIN, NAME, LUMBRIDGE, tracker.isMyKill(index), true, 100));
-		assertEquals(AREA, tracker.recordDespawn(index, GOBLIN, NOW));
+		tracker.recordDeath(index, GOBLIN, NAME, LUMBRIDGE, 100);
+		PermadeathTracker.PendingDeath death = tracker.takeDeath(index, GOBLIN);
+		assertEquals(NAME, death.getName());
+		assertEquals(AREA, tracker.countKill(index, GOBLIN, death.getName(), death.getRegion(), NOW));
 	}
 
 	@Test
@@ -65,10 +67,9 @@ public class PermadeathTrackerTest
 	}
 
 	@Test
-	public void damageTallyResetsWhenTheNpcDespawns()
+	public void damageTallyResetsWhenTheKillIsCounted()
 	{
-		tracker.recordHit(7, 9, true);
-		tracker.recordDespawn(7, GOBLIN, NOW);
+		kill(7);
 
 		assertFalse(tracker.isMyKill(7));
 	}
@@ -87,35 +88,42 @@ public class PermadeathTrackerTest
 	@Test
 	public void deathWithoutDespawnCountsNothing()
 	{
-		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, true, true, 100);
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, 100);
 
+		assertTrue(tracker.isPending(7));
 		assertEquals(0, tracker.kills(AREA));
 		assertFalse(tracker.isHidden(7, GOBLIN));
 	}
 
 	@Test
-	public void someoneElsesKillIsIgnoredWhenOnlyMineIsOn()
+	public void takeDeathOnlyMatchesTheDyingNpc()
 	{
-		assertFalse(tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, true, 100));
-		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
-		assertEquals(0, tracker.kills(AREA));
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, 100);
+
+		assertNull(tracker.takeDeath(7, 9999));
+		assertNull(tracker.takeDeath(8, GOBLIN));
+		assertEquals(GOBLIN, tracker.takeDeath(7, GOBLIN).getNpcId());
+		assertNull(tracker.takeDeath(7, GOBLIN));
 	}
 
 	@Test
-	public void someoneElsesKillCountsWhenOnlyMineIsOff()
+	public void forgetDropsDamageAndPendingDeath()
 	{
-		assertTrue(tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, false, 100));
-		assertEquals(AREA, tracker.recordDespawn(7, GOBLIN, NOW));
-		assertEquals(1, tracker.kills(AREA));
+		tracker.recordHit(7, 9, true);
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, 100);
+
+		tracker.forget(7);
+
+		assertFalse(tracker.isMyKill(7));
+		assertFalse(tracker.isPending(7));
 	}
 
 	@Test
 	public void killingAnAlreadyHiddenNpcDoesNotDoubleCount()
 	{
 		kill(7);
-		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, false, 200);
 
-		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
+		assertNull(tracker.countKill(7, GOBLIN, NAME, LUMBRIDGE, NOW + 1));
 		assertEquals(1, tracker.kills(AREA));
 	}
 
@@ -207,11 +215,11 @@ public class PermadeathTrackerTest
 	@Test
 	public void stalePendingDeathsArePruned()
 	{
-		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, true, true, 100);
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, 100);
 		tracker.prune(100 + PermadeathTracker.PENDING_TTL_TICKS + 1, NOW);
 
 		assertFalse(tracker.isPending(7));
-		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
+		assertNull(tracker.takeDeath(7, GOBLIN));
 	}
 
 	@Test
@@ -270,8 +278,7 @@ public class PermadeathTrackerTest
 	public void killsInRegionListsOnlyThatRegion()
 	{
 		kill(7);
-		tracker.recordDeath(8, 2, "Cow", LUMBRIDGE + 1, true, true, 100);
-		tracker.recordDespawn(8, 2, NOW);
+		tracker.countKill(8, 2, "Cow", LUMBRIDGE + 1, NOW);
 
 		assertEquals(1, tracker.killsInRegion(LUMBRIDGE).size());
 		assertEquals(Integer.valueOf(1), tracker.killsInRegion(LUMBRIDGE).get(NAME));

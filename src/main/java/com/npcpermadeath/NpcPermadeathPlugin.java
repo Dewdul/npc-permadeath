@@ -10,11 +10,13 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
@@ -83,8 +85,21 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Inject
 	private Gson gson;
 
+	/** A death whose loot we are waiting on before deciding if it counts. */
+	@Value
+	private static class Decision
+	{
+		int index;
+		int npcId;
+		String name;
+		int region;
+		WorldPoint tile;
+		int deathTick;
+	}
+
 	private final PermadeathTracker tracker = new PermadeathTracker();
-	private final HiddenLoot loot = new HiddenLoot();
+	private final LootWatcher loot = new LootWatcher();
+	private final List<Decision> pendingDecisions = new ArrayList<>();
 	private SpawnTotals totals;
 
 	private Set<String> bosses = new HashSet<>();
@@ -171,29 +186,23 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	public void onNpcDespawned(NpcDespawned event)
 	{
 		NPC npc = event.getNpc();
-		if (npc.isDead())
+		if (!npc.isDead())
 		{
-			handleDeath(npc);
-			if (config.hideLoot() && tracker.isHidden(npc.getIndex(), npc.getId()))
-			{
-				loot.armTile(npc.getWorldLocation(), client.getTickCount());
-			}
+			tracker.forget(npc.getIndex());
+			return;
 		}
-		AreaKey area = tracker.recordDespawn(npc.getIndex(), npc.getId(), now());
-		if (area != null)
+		handleDeath(npc);
+		int tick = client.getTickCount();
+		if (config.hideLoot() && tracker.isHidden(npc.getIndex(), npc.getId()))
 		{
-			log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), npc.getIndex());
-			saveState();
-			boolean totalKnown = totals.get(area.getName(), area.getRegion()) != null;
-			announce(area);
-			// If the total was missing, say the line again once the lookup fills it in.
-			totals.ensure(area.getName(), now(), () ->
-			{
-				if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
-				{
-					announce(area);
-				}
-			});
+			loot.armTile(npc.getWorldLocation(), tick);
+		}
+		PermadeathTracker.PendingDeath death = tracker.takeDeath(npc.getIndex(), npc.getId());
+		if (death != null)
+		{
+			// Loot can land a tick after the despawn, so decide next tick.
+			pendingDecisions.add(new Decision(npc.getIndex(), npc.getId(), death.getName(), death.getRegion(),
+				npc.getWorldLocation(), tick));
 		}
 	}
 
@@ -210,8 +219,57 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		tracker.recordDeath(index, npc.getId(), name, location.getRegionID(), tracker.isMyKill(index),
-			config.onlyMyKills(), client.getTickCount());
+		tracker.recordDeath(index, npc.getId(), name, location.getRegionID(), client.getTickCount());
+	}
+
+	/**
+	 * Decides whether a finished death counts. Loot settles it when there is
+	 * any: the kill is yours if your loot appeared on the tile. NPCs that drop
+	 * nothing fall back to the damage rule.
+	 */
+	private void resolveDecisions(int tick)
+	{
+		Iterator<Decision> it = pendingDecisions.iterator();
+		while (it.hasNext())
+		{
+			Decision d = it.next();
+			if (tick < d.getDeathTick() + LootWatcher.WINDOW_TICKS)
+			{
+				continue;
+			}
+			it.remove();
+			boolean mine;
+			if (d.getTile() != null && loot.sawLoot(d.getTile(), d.getDeathTick()))
+			{
+				mine = loot.sawMyLoot(d.getTile(), d.getDeathTick());
+			}
+			else
+			{
+				mine = tracker.isMyKill(d.getIndex());
+			}
+			if (!mine && config.onlyMyKills())
+			{
+				log.debug("Not counting {} (index {}): not your kill", d.getName(), d.getIndex());
+				tracker.forget(d.getIndex());
+				continue;
+			}
+			AreaKey area = tracker.countKill(d.getIndex(), d.getNpcId(), d.getName(), d.getRegion(), now());
+			if (area != null)
+			{
+				log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), d.getIndex());
+				saveState();
+				boolean totalKnown = totals.get(area.getName(), area.getRegion()) != null;
+				announce(area);
+				// If the total was missing, say the line again once the lookup fills it in.
+				totals.ensure(area.getName(), now(), () ->
+				{
+					if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
+					{
+						announce(area);
+					}
+				});
+			}
+		}
 	}
 
 	// ---- hiding ------------------------------------------------------------
@@ -289,11 +347,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Subscribe
 	public void onItemSpawned(ItemSpawned event)
 	{
-		if (config.hideLoot())
-		{
-			loot.onItemSpawned(event.getItem(), event.getTile().getWorldLocation(), event.getTile().getSceneLocation(),
-				client.getTickCount());
-		}
+		loot.onItemSpawned(event.getItem(), event.getTile().getWorldLocation(), event.getTile().getSceneLocation(),
+			client.getTickCount());
 	}
 
 	@Subscribe
@@ -339,6 +394,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	public void onGameTick(GameTick event)
 	{
 		tickCounter++;
+		resolveDecisions(client.getTickCount());
 		loot.tick(client.getTickCount());
 		if (tickCounter % PRUNE_INTERVAL_TICKS == 0)
 		{
@@ -363,6 +419,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				saveIfDirty();
 				tracker.clearSession();
 				loot.clear();
+				pendingDecisions.clear();
 				currentWorld = -1;
 				break;
 			default:
