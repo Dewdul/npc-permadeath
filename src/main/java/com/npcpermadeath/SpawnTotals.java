@@ -100,12 +100,9 @@ class SpawnTotals
 			{
 				stored.forEach((name, cached) ->
 				{
-					if (cached != null && cached.byRegion != null)
+					// Entries without labels come from an older format; drop them so they are fetched again.
+					if (cached != null && cached.byRegion != null && cached.labelByRegion != null)
 					{
-						if (cached.labelByRegion == null)
-						{
-							cached.labelByRegion = new HashMap<>();
-						}
 						cache.put(name, cached);
 						regionLabels.putAll(cached.labelByRegion);
 					}

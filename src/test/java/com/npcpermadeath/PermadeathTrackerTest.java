@@ -275,6 +275,24 @@ public class PermadeathTrackerTest
 	}
 
 	@Test
+	public void rehomingMovesKillsAndHiddenRecordsToTheOtherChunk()
+	{
+		AreaKey border = new AreaKey(NAME, LUMBRIDGE + 1);
+		tracker.countKill(7, GOBLIN, NAME, LUMBRIDGE + 1, NOW);
+		tracker.countKill(8, GOBLIN, NAME, LUMBRIDGE, NOW);
+		tracker.markSaved();
+
+		tracker.rehome(border, LUMBRIDGE);
+
+		assertEquals(0, tracker.kills(border));
+		assertEquals(2, tracker.kills(AREA));
+		assertEquals(2, tracker.hiddenHere(AREA));
+		assertTrue(tracker.isHidden(7, GOBLIN));
+		assertTrue(tracker.isDirty());
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(9, GOBLIN, NAME, LUMBRIDGE, NOW));
+	}
+
+	@Test
 	public void forgettingAnAreaBringsItsNpcsBackEverywhere()
 	{
 		kill(7);

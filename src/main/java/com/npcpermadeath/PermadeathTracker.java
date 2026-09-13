@@ -316,6 +316,37 @@ class PermadeathTracker
 		return new HashMap<>(kills);
 	}
 
+	/**
+	 * Moves an area's kills and hidden records into another region of the
+	 * same NPC, for kills recorded in a chunk the NPC does not spawn in.
+	 */
+	void rehome(AreaKey from, int toRegion)
+	{
+		if (from.getRegion() == toRegion)
+		{
+			return;
+		}
+		Integer moved = kills.remove(from);
+		if (moved == null)
+		{
+			return;
+		}
+		AreaKey to = new AreaKey(from.getName(), toRegion);
+		kills.merge(to, moved, Integer::sum);
+		for (Map<Integer, HiddenNpc> world : hidden.values())
+		{
+			for (HiddenNpc rec : world.values())
+			{
+				if (rec.area().equals(from))
+				{
+					rec.region = toRegion;
+				}
+			}
+		}
+		setCurrentWorld(currentWorld);
+		dirty = true;
+	}
+
 	/** Drops the kill count for one NPC in one area and brings its hidden NPCs back on every world. */
 	void forgetArea(AreaKey key)
 	{

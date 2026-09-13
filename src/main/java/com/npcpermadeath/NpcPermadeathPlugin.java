@@ -285,7 +285,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				// If the total was missing, say the line again once the lookup fills it in.
 				totals.ensure(area.getName(), now(), () ->
 				{
-					refreshPanel();
+					rehomeBorderKills();
 					if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
 					{
 						announce(area);
@@ -554,6 +554,32 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		message("NPC Permadeath: " + area.getName() + " in " + placeName(area) + " forgotten.");
 	}
 
+	/**
+	 * Kills recorded in a chunk the wiki says the NPC does not spawn in (it
+	 * wandered over a border) are moved to the neighbouring chunk that has
+	 * the spawns, once the wiki data is available.
+	 */
+	private void rehomeBorderKills()
+	{
+		boolean moved = false;
+		for (AreaKey area : tracker.killsByArea().keySet())
+		{
+			int home = totals.homeRegion(area.getName(), area.getRegion());
+			if (home != area.getRegion())
+			{
+				log.debug("Moving {} kills of {} from region {} to {}", tracker.kills(area), area.getName(),
+					area.getRegion(), home);
+				tracker.rehome(area, home);
+				moved = true;
+			}
+		}
+		if (moved)
+		{
+			saveState();
+		}
+		refreshPanel();
+	}
+
 	/** Snapshots the kill list on the client thread and hands it to the panel on the Swing thread. */
 	private void refreshPanel()
 	{
@@ -612,6 +638,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		tracker.load(state == null ? new PermadeathTracker.SavedState() : state);
 		loaded = true;
 		log.debug("Loaded {} kills", tracker.totalKills());
+		rehomeBorderKills();
+		for (AreaKey area : tracker.killsByArea().keySet())
+		{
+			totals.ensure(area.getName(), now(), this::rehomeBorderKills);
+		}
 		refreshPanel();
 		// NPCs already in view spawned before the state was known.
 		for (NPC npc : client.getTopLevelWorldView().npcs())
