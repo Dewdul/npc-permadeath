@@ -56,7 +56,6 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.OverlayMenuEntry;
-import net.runelite.client.ui.overlay.tooltip.TooltipManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
@@ -109,9 +108,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 
 	@Inject
 	private OverlayManager overlayManager;
-
-	@Inject
-	private TooltipManager tooltipManager;
 
 	@Inject
 	private EventBus eventBus;
@@ -177,7 +173,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
-		mapOverlay = new ChunkMapOverlay(this, client, tooltipManager, chunkSource);
+		mapOverlay = new ChunkMapOverlay(this, client, chunkSource);
 		overlayManager.add(mapOverlay);
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
@@ -866,15 +862,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 
 		@Override
-		public List<String> lines(int region)
+		public List<ChunkMapOverlay.Entry> entries(int region)
 		{
-			List<String> lines = new ArrayList<>();
+			List<ChunkMapOverlay.Entry> entries = new ArrayList<>();
 			for (PermadeathPanel.Row row : rowsFor(region))
 			{
-				lines.add(row.getArea().getName() + " " + row.getKills()
-					+ (row.getTotal() == null ? "" : "/" + row.getTotal()));
+				entries.add(new ChunkMapOverlay.Entry(row.getArea().getName(), row.getKills(), row.getTotal()));
 			}
-			return lines;
+			return entries;
 		}
 	};
 
