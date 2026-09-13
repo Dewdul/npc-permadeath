@@ -25,9 +25,12 @@ import net.runelite.api.GameState;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.MenuAction;
 import net.runelite.api.NPC;
+import java.awt.image.BufferedImage;
 import net.runelite.api.Player;
 import net.runelite.api.Renderable;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameStateChanged;
@@ -43,13 +46,20 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.callback.RenderCallback;
 import net.runelite.client.callback.RenderCallbackManager;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.OverlayMenuClicked;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.OverlayMenuEntry;
+import net.runelite.client.ui.overlay.worldmap.WorldMapOverlay;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
@@ -64,9 +74,16 @@ import okhttp3.OkHttpClient;
 public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 {
 	static final String KEY_STATE = "state";
+	static final String KEY_LEARNED = "learnedSpawns";
+	static final String KEY_PENDING = "pendingSpawns";
 
 	private static final int PRUNE_INTERVAL_TICKS = 100;
 	private static final int SAVE_INTERVAL_TICKS = 200;
+	private static final int UPLOAD_INTERVAL_TICKS = 500;
+	/** NPCs walking into view appear about 15 tiles out; a respawn is closer. */
+	private static final int LEARN_MAX_DISTANCE = 13;
+	/** Moving further than this in one tick means the player teleported. */
+	private static final int TELEPORT_DISTANCE = 2;
 
 	@Inject
 	private Client client;
@@ -92,6 +109,18 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Inject
 	private ClientToolbar clientToolbar;
 
+	@Inject
+	private OverlayManager overlayManager;
+
+	@Inject
+	private WorldMapOverlay worldMapOverlay;
+
+	@Inject
+	private WorldMapPointManager worldMapPointManager;
+
+	@Inject
+	private EventBus eventBus;
+
 	/** A death whose loot we are waiting on before deciding if it counts. */
 	@Value
 	private static class Decision
@@ -107,9 +136,15 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private final PermadeathTracker tracker = new PermadeathTracker();
 	private final LootWatcher loot = new LootWatcher();
 	private final List<Decision> pendingDecisions = new ArrayList<>();
+	private final SpawnLearner learner = new SpawnLearner();
 	private SpawnTotals totals;
+	private SpawnSync sync;
+	private WorldPoint lastPlayerLocation;
 	private PermadeathPanel panel;
 	private NavigationButton navButton;
+	private ChunkMapOverlay mapOverlay;
+	private BufferedImage mapIcon;
+	private final List<WorldMapPoint> mapPoints = new ArrayList<>();
 
 	private Set<String> bosses = new HashSet<>();
 	private List<String> nameFilter = new ArrayList<>();
@@ -132,14 +167,23 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		ignoredNames = parseNames(config.ignoredNames());
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
-		panel = new PermadeathPanel(area -> clientThread.invoke(() -> forgetArea(area)));
+		sync = new SpawnSync(okHttpClient, gson, configManager, clientThread);
+		learner.load(loadGlobalList(KEY_LEARNED), loadGlobalList(KEY_PENDING));
+		learner.addCommunity(sync.load());
+		mapIcon = ImageUtil.loadImageResource(getClass(), "panel_icon.png");
+		panel = new PermadeathPanel(
+			area -> clientThread.invoke(() -> forgetArea(area)),
+			this::openSettings,
+			region -> clientThread.invoke(() -> showOnMap(region)));
 		navButton = NavigationButton.builder()
 			.tooltip("NPC Permadeath")
-			.icon(ImageUtil.loadImageResource(getClass(), "panel_icon.png"))
+			.icon(mapIcon)
 			.priority(8)
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
+		mapOverlay = new ChunkMapOverlay(this, client, worldMapOverlay);
+		overlayManager.add(mapOverlay);
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
@@ -155,14 +199,21 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		renderCallbackManager.unregister(this);
 		clientToolbar.removeNavigation(navButton);
+		overlayManager.remove(mapOverlay);
+		worldMapPointManager.removeIf(mapPoints::contains);
+		mapPoints.clear();
+		mapOverlay = null;
 		navButton = null;
 		panel = null;
 		saveIfDirty();
+		saveLearner();
 		tracker.clearAll();
 		tracker.markSaved();
 		loot.clear();
+		learner.clearSession();
 		loaded = false;
 		currentWorld = -1;
+		lastPlayerLocation = null;
 	}
 
 	/** Called by the client for every entity about to be drawn; false skips it. */
@@ -235,7 +286,15 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 		String name = cleanName(npc);
 		WorldPoint location = areaLocation(npc);
-		if (name == null || location == null || !isEligible(npc, name))
+		if (name == null || location == null)
+		{
+			return;
+		}
+		if (!inInstance())
+		{
+			learner.noteDeath(index, npc.getId(), name, client.getTickCount());
+		}
+		if (!isEligible(npc, name))
 		{
 			return;
 		}
@@ -280,17 +339,18 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), d.getIndex());
 				saveState();
 				refreshPanel();
-				boolean totalKnown = totals.get(area.getName(), area.getRegion()) != null;
+				boolean totalKnown = spawnTotal(area) != null;
 				announce(area);
 				// If the total was missing, say the line again once the lookup fills it in.
 				totals.ensure(area.getName(), now(), () ->
 				{
 					rehomeBorderKills();
-					if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
+					if (!totalKnown && spawnTotal(area) != null)
 					{
 						announce(area);
 					}
 				});
+				fetchCommunity(area.getName());
 			}
 		}
 	}
@@ -300,7 +360,44 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Subscribe
 	public void onNpcSpawned(NpcSpawned event)
 	{
+		learnSpawn(event.getNpc());
 		considerNpc(event.getNpc());
+	}
+
+	/** If this is an NPC we saw die coming back, the tile it appears on is its spawn point. */
+	private void learnSpawn(NPC npc)
+	{
+		String name = cleanName(npc);
+		WorldPoint location = npc.getWorldLocation();
+		if (name == null || location == null)
+		{
+			return;
+		}
+		SpawnLearner.SpawnTile tile = learner.noteSpawn(npc.getIndex(), npc.getId(), name, location.getX(),
+			location.getY(), location.getPlane(), client.getTickCount(), isTrustworthySpawnTile(location));
+		if (tile != null)
+		{
+			log.debug("Learned spawn tile of {} at {},{},{}", name, tile.getX(), tile.getY(), tile.getPlane());
+			refreshPanel();
+		}
+	}
+
+	/**
+	 * A respawn happens on the NPC's spawn tile, but an NPC can also appear
+	 * because it walked into range or because the player teleported next to
+	 * it. Only trust the tile when neither of those explains the spawn.
+	 */
+	private boolean isTrustworthySpawnTile(WorldPoint npcLocation)
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null || inInstance() || lastPlayerLocation == null)
+		{
+			return false;
+		}
+		WorldPoint playerLocation = local.getWorldLocation();
+		return playerLocation != null
+			&& npcLocation.distanceTo(playerLocation) <= LEARN_MAX_DISTANCE
+			&& playerLocation.distanceTo(lastPlayerLocation) <= TELEPORT_DISTANCE;
 	}
 
 	/** Hides the NPC if its area still owes kills. */
@@ -419,13 +516,21 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		tickCounter++;
 		resolveDecisions(client.getTickCount());
 		loot.tick(client.getTickCount());
+		Player local = client.getLocalPlayer();
+		lastPlayerLocation = local == null ? null : local.getWorldLocation();
 		if (tickCounter % PRUNE_INTERVAL_TICKS == 0)
 		{
 			tracker.prune(client.getTickCount(), now());
+			learner.prune(client.getTickCount());
 		}
 		if (tickCounter % SAVE_INTERVAL_TICKS == 0)
 		{
 			saveIfDirty();
+			saveLearner();
+		}
+		if (tickCounter % UPLOAD_INTERVAL_TICKS == 0)
+		{
+			shareSpawns();
 		}
 	}
 
@@ -440,10 +545,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			case HOPPING:
 			case LOGIN_SCREEN:
 				saveIfDirty();
+				saveLearner();
+				shareSpawns();
 				tracker.clearSession();
+				learner.clearSession();
 				loot.clear();
 				pendingDecisions.clear();
 				currentWorld = -1;
+				lastPlayerLocation = null;
 				break;
 			default:
 				break;
@@ -526,13 +635,15 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 		int region = here.getRegionID();
 		Map<String, Integer> kills = tracker.killsInRegion(region);
+		message("NPC Permadeath: " + learner.learnedCount() + " spawn tile(s) observed, " + learner.communityCount()
+			+ " from other players, " + learner.pendingCount() + " waiting to share.");
 		if (kills.isEmpty())
 		{
-			message("NPC Permadeath: nothing slain in this area yet. " + tracker.totalKills()
+			message("Nothing slain in this area yet. " + tracker.totalKills()
 				+ " kill(s) remembered overall. ::permadeath reset forgets them all.");
 			return;
 		}
-		message("NPC Permadeath, " + placeName(new AreaKey("", region)) + ":");
+		message("NPC Permadeath, " + chunkHeading(new AreaKey("", region)) + ":");
 		kills.forEach((name, count) ->
 		{
 			AreaKey area = new AreaKey(name, region);
@@ -540,10 +651,44 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		});
 	}
 
+	/** Wiki place name for the chunk, or null. */
 	private String placeName(AreaKey area)
 	{
-		String label = totals.label(area.getName(), area.getRegion());
-		return label != null ? label : "Region " + area.getRegion();
+		return totals.label(area.getName(), area.getRegion());
+	}
+
+	/** "Lumbridge (3200, 3200)", or just the coordinates when the place is unknown. */
+	private String chunkHeading(AreaKey area)
+	{
+		String place = placeName(area);
+		String corner = "(" + ((area.getRegion() >> 8) << 6) + ", " + ((area.getRegion() & 0xff) << 6) + ")";
+		return place == null ? "Chunk " + corner : place + " " + corner;
+	}
+
+	private static WorldPoint chunkCentre(int region)
+	{
+		return new WorldPoint(((region >> 8) << 6) + ChunkMapOverlay.CHUNK_TILES / 2,
+			((region & 0xff) << 6) + ChunkMapOverlay.CHUNK_TILES / 2, 0);
+	}
+
+	/** Opens this plugin's settings by asking the config panel the same way an overlay's Configure entry does. */
+	private void openSettings()
+	{
+		if (mapOverlay != null)
+		{
+			eventBus.post(new OverlayMenuClicked(
+				new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY_CONFIG, "Configure", "NPC Permadeath"), mapOverlay));
+		}
+	}
+
+	private void showOnMap(int region)
+	{
+		client.getWorldMap().setWorldMapPositionTarget(chunkCentre(region));
+		Widget map = client.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
+		if (map == null || map.isHidden())
+		{
+			message("NPC Permadeath: open the world map to see the chunk.");
+		}
 	}
 
 	private void forgetArea(AreaKey area)
@@ -551,7 +696,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		tracker.forgetArea(area);
 		saveState();
 		refreshPanel();
-		message("NPC Permadeath: " + area.getName() + " in " + placeName(area) + " forgotten.");
+		message("NPC Permadeath: " + area.getName() + " in " + chunkHeading(area) + " forgotten.");
 	}
 
 	/**
@@ -580,7 +725,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		refreshPanel();
 	}
 
-	/** Snapshots the kill list on the client thread and hands it to the panel on the Swing thread. */
+	/**
+	 * Snapshots the kill list on the client thread and hands it to the
+	 * panel on the Swing thread, and refreshes the world map drawing.
+	 */
 	private void refreshPanel()
 	{
 		PermadeathPanel target = panel;
@@ -590,8 +738,48 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 		List<PermadeathPanel.Row> rows = new ArrayList<>();
 		tracker.killsByArea().forEach((area, kills) -> rows.add(new PermadeathPanel.Row(
-			area, placeName(area), kills, totals.get(area.getName(), area.getRegion()), tracker.hiddenHere(area))));
+			area, chunkHeading(area), kills, spawnTotal(area), tracker.hiddenHere(area))));
 		SwingUtilities.invokeLater(() -> target.update(rows));
+		refreshMap(rows);
+	}
+
+	private void refreshMap(List<PermadeathPanel.Row> rows)
+	{
+		Map<Integer, List<PermadeathPanel.Row>> byRegion = new java.util.TreeMap<>();
+		for (PermadeathPanel.Row row : rows)
+		{
+			byRegion.computeIfAbsent(row.getArea().getRegion(), r -> new ArrayList<>()).add(row);
+		}
+		List<ChunkMapOverlay.Chunk> chunks = new ArrayList<>();
+		worldMapPointManager.removeIf(mapPoints::contains);
+		mapPoints.clear();
+		byRegion.forEach((region, regionRows) ->
+		{
+			regionRows.sort((a, b) -> a.getArea().getName().compareToIgnoreCase(b.getArea().getName()));
+			List<String> lines = new ArrayList<>();
+			boolean complete = true;
+			for (PermadeathPanel.Row row : regionRows)
+			{
+				lines.add(row.getArea().getName() + " " + row.getKills()
+					+ (row.getTotal() == null ? "" : "/" + row.getTotal()));
+				complete &= row.getTotal() != null && row.getKills() >= row.getTotal();
+			}
+			String heading = regionRows.get(0).getHeading();
+			chunks.add(new ChunkMapOverlay.Chunk(region, heading, lines, complete));
+			WorldMapPoint point = WorldMapPoint.builder()
+				.worldPoint(chunkCentre(region))
+				.image(mapIcon)
+				.name("NPC Permadeath")
+				.tooltip(heading + "</br>" + String.join("</br>", lines))
+				.jumpOnClick(false)
+				.build();
+			mapPoints.add(point);
+			worldMapPointManager.add(point);
+		});
+		if (mapOverlay != null)
+		{
+			mapOverlay.setChunks(chunks);
+		}
 	}
 
 	private void announce(AreaKey area)
@@ -605,8 +793,88 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 
 	private String totalSuffix(AreaKey area)
 	{
-		Integer total = totals.get(area.getName(), area.getRegion());
+		Integer total = spawnTotal(area);
 		return total == null ? "" : " of " + total;
+	}
+
+	/**
+	 * Spawns of the NPC in the chunk: the wiki's count or the number of
+	 * spawn tiles observed by players, whichever is larger. Null if neither
+	 * knows anything.
+	 */
+	private Integer spawnTotal(AreaKey area)
+	{
+		Integer wiki = totals.get(area.getName(), area.getRegion());
+		int observed = learner.countInRegion(area.getName(), area.getRegion());
+		if (wiki == null)
+		{
+			return observed == 0 ? null : observed;
+		}
+		return Math.max(wiki, observed);
+	}
+
+	// ---- community spawn data ------------------------------------------
+
+	private void fetchCommunity(String name)
+	{
+		if (!config.shareSpawns())
+		{
+			return;
+		}
+		sync.fetch(config.syncUrl(), name, now(), tiles ->
+		{
+			learner.addCommunity(tiles);
+			refreshPanel();
+		});
+	}
+
+	private void shareSpawns()
+	{
+		if (!config.shareSpawns() || learner.pendingCount() == 0)
+		{
+			return;
+		}
+		sync.upload(config.syncUrl(), learner.takePendingUpload(), learner::uploadFailed);
+	}
+
+	private void saveLearner()
+	{
+		if (!learner.isDirty())
+		{
+			return;
+		}
+		saveGlobalList(KEY_LEARNED, learner.serializeLearned());
+		saveGlobalList(KEY_PENDING, learner.serializePending());
+		learner.markSaved();
+	}
+
+	private List<String> loadGlobalList(String key)
+	{
+		String stored = configManager.getConfiguration(NpcPermadeathConfig.GROUP, key);
+		List<String> out = new ArrayList<>();
+		if (stored != null)
+		{
+			for (String entry : stored.split(";"))
+			{
+				if (!entry.isEmpty())
+				{
+					out.add(entry);
+				}
+			}
+		}
+		return out;
+	}
+
+	private void saveGlobalList(String key, List<String> entries)
+	{
+		if (entries.isEmpty())
+		{
+			configManager.unsetConfiguration(NpcPermadeathConfig.GROUP, key);
+		}
+		else
+		{
+			configManager.setConfiguration(NpcPermadeathConfig.GROUP, key, String.join(";", entries));
+		}
 	}
 
 	private void forgetAll()
@@ -642,6 +910,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		for (AreaKey area : tracker.killsByArea().keySet())
 		{
 			totals.ensure(area.getName(), now(), this::rehomeBorderKills);
+			fetchCommunity(area.getName());
 		}
 		refreshPanel();
 		// NPCs already in view spawned before the state was known.

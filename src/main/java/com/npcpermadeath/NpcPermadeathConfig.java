@@ -10,6 +10,8 @@ public interface NpcPermadeathConfig extends Config
 {
 	String GROUP = "npcpermadeath";
 	String KEY_FORGET_ALL = "forgetAll";
+	/** Community spawn server; see the server directory for how to deploy one. */
+	String DEFAULT_SYNC_URL = "https://npc-permadeath-spawns.REPLACE-ME.workers.dev";
 
 	@ConfigSection(
 		name = "Which NPCs count",
@@ -40,13 +42,13 @@ public interface NpcPermadeathConfig extends Config
 	@ConfigItem(
 		keyName = "includeBosses",
 		name = "Include bosses",
-		description = "Let bosses (anything the OSRS Wiki lists as a boss) be killed for good too. Off means bosses always respawn as normal.",
+		description = "Bosses (anything the OSRS Wiki lists as a boss) can be killed for good too. Off means bosses always respawn as normal.",
 		section = whichSection,
 		position = 12
 	)
 	default boolean includeBosses()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(
@@ -58,7 +60,7 @@ public interface NpcPermadeathConfig extends Config
 	)
 	default boolean includeInstances()
 	{
-		return false;
+		return true;
 	}
 
 	@ConfigItem(
@@ -131,6 +133,38 @@ public interface NpcPermadeathConfig extends Config
 	default boolean announceKills()
 	{
 		return true;
+	}
+
+	@ConfigSection(
+		name = "Community spawn data",
+		description = "Pool observed spawn points with other players to fill gaps in the wiki.",
+		position = 25
+	)
+	String communitySection = "community";
+
+	@ConfigItem(
+		keyName = "shareSpawns",
+		name = "Share spawn data",
+		description = "Upload the spawn tiles you see NPCs respawn on and download everyone else's, so totals exist even where the wiki has none. "
+			+ "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers.",
+		section = communitySection,
+		position = 26
+	)
+	default boolean shareSpawns()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "syncUrl",
+		name = "Server URL",
+		description = "The community spawn server to use. Leave as is unless you run your own.",
+		section = communitySection,
+		position = 27
+	)
+	default String syncUrl()
+	{
+		return DEFAULT_SYNC_URL;
 	}
 
 	@ConfigItem(

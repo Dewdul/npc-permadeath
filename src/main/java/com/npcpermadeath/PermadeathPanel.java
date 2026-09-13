@@ -1,11 +1,17 @@
 package com.npcpermadeath;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -22,7 +28,7 @@ import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 
-/** Sidebar list of everything slain, grouped by place. */
+/** Sidebar list of everything slain, one section per map chunk. */
 class PermadeathPanel extends PluginPanel
 {
 	/** One NPC type in one map chunk. */
@@ -30,22 +36,24 @@ class PermadeathPanel extends PluginPanel
 	static class Row
 	{
 		AreaKey area;
-		/** Wiki place name for the chunk, or a fallback. */
-		String place;
+		/** Heading for the chunk, e.g. "Lumbridge (3200, 3200)". */
+		String heading;
 		int kills;
-		/** Spawns in the area per the wiki, or null if unknown. */
+		/** Spawns in the chunk, or null if unknown. */
 		Integer total;
 		int hiddenHere;
 	}
 
 	private final Consumer<AreaKey> onForget;
+	private final Consumer<Integer> onShowOnMap;
 	private final JLabel summary = new JLabel();
 	private final JPanel list = new JPanel();
 
-	PermadeathPanel(Consumer<AreaKey> onForget)
+	PermadeathPanel(Consumer<AreaKey> onForget, Runnable onOpenSettings, Consumer<Integer> onShowOnMap)
 	{
 		super(false);
 		this.onForget = onForget;
+		this.onShowOnMap = onShowOnMap;
 		setLayout(new BorderLayout());
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -56,7 +64,14 @@ class PermadeathPanel extends PluginPanel
 		JLabel title = new JLabel("NPC Permadeath");
 		title.setFont(FontManager.getRunescapeBoldFont());
 		title.setForeground(ColorScheme.BRAND_ORANGE);
-		header.add(title, BorderLayout.NORTH);
+		header.add(title, BorderLayout.WEST);
+		JButton settings = new JButton("Settings");
+		settings.setFont(FontManager.getRunescapeSmallFont());
+		settings.setMargin(new Insets(1, 6, 1, 6));
+		settings.setFocusPainted(false);
+		settings.setToolTipText("Open the plugin settings");
+		settings.addActionListener(e -> onOpenSettings.run());
+		header.add(settings, BorderLayout.EAST);
 		summary.setFont(FontManager.getRunescapeSmallFont());
 		summary.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		header.add(summary, BorderLayout.SOUTH);
@@ -66,7 +81,7 @@ class PermadeathPanel extends PluginPanel
 		list.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		add(list, BorderLayout.CENTER);
 
-		update(java.util.Collections.emptyList());
+		update(Collections.emptyList());
 	}
 
 	/** Rebuilds the list. Must be called on the Swing thread. */
@@ -74,38 +89,29 @@ class PermadeathPanel extends PluginPanel
 	{
 		list.removeAll();
 		int totalKills = rows.stream().mapToInt(Row::getKills).sum();
+		long chunks = rows.stream().map(r -> r.getArea().getRegion()).distinct().count();
 		if (rows.isEmpty())
 		{
 			summary.setText("Nothing slain yet.");
-			JLabel hint = new JLabel("<html>Kill something. Every kill keeps one more of its kind hidden in that area.</html>");
+			JLabel hint = new JLabel("<html>Kill something. Every kill keeps one more of its kind hidden in that chunk of the map.</html>");
 			hint.setFont(FontManager.getRunescapeSmallFont());
 			hint.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			list.add(hint);
 		}
 		else
 		{
-			summary.setText(totalKills + " slain across " + countPlaces(rows) + " chunk" + (countPlaces(rows) == 1 ? "" : "s"));
-			Map<String, java.util.Set<Integer>> chunksPerPlace = new java.util.HashMap<>();
-			for (Row row : rows)
-			{
-				chunksPerPlace.computeIfAbsent(row.getPlace().toLowerCase(), p -> new java.util.HashSet<>())
-					.add(row.getArea().getRegion());
-			}
+			summary.setText("<html>" + totalKills + " slain across " + chunks + " chunk" + (chunks == 1 ? "" : "s")
+				+ ". Open the world map to see them.</html>");
 			Map<String, List<Row>> byChunk = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 			for (Row row : rows)
 			{
-				String heading = row.getPlace();
-				if (chunksPerPlace.get(row.getPlace().toLowerCase()).size() > 1)
-				{
-					heading += " " + chunkCorner(row.getArea().getRegion());
-				}
-				byChunk.computeIfAbsent(heading, p -> new java.util.ArrayList<>()).add(row);
+				byChunk.computeIfAbsent(row.getHeading(), h -> new ArrayList<>()).add(row);
 			}
-			byChunk.forEach((place, placeRows) ->
+			byChunk.forEach((heading, chunkRows) ->
 			{
-				list.add(placeHeader(place));
-				placeRows.sort((a, b) -> a.getArea().getName().compareToIgnoreCase(b.getArea().getName()));
-				for (Row row : placeRows)
+				list.add(chunkHeader(heading, chunkRows.get(0).getArea().getRegion()));
+				chunkRows.sort((a, b) -> a.getArea().getName().compareToIgnoreCase(b.getArea().getName()));
+				for (Row row : chunkRows)
 				{
 					list.add(rowPanel(row));
 				}
@@ -116,24 +122,35 @@ class PermadeathPanel extends PluginPanel
 		list.repaint();
 	}
 
-	private static long countPlaces(List<Row> rows)
+	private JLabel chunkHeader(String heading, int region)
 	{
-		return rows.stream().map(r -> r.getArea().getRegion()).distinct().count();
-	}
-
-	/** The south-west world coordinate of a chunk, to tell chunks of the same place apart. */
-	private static String chunkCorner(int region)
-	{
-		return "(" + ((region >> 8) << 6) + ", " + ((region & 0xff) << 6) + ")";
-	}
-
-	private static JLabel placeHeader(String place)
-	{
-		JLabel label = new JLabel(place);
+		JLabel label = new JLabel(heading);
 		label.setFont(FontManager.getRunescapeBoldFont());
 		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		label.setBorder(BorderFactory.createEmptyBorder(4, 0, 2, 0));
 		label.setAlignmentX(LEFT_ALIGNMENT);
+		label.setToolTipText("Click to centre the world map on this chunk");
+		label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		label.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				onShowOnMap.accept(region);
+			}
+
+			@Override
+			public void mouseEntered(MouseEvent e)
+			{
+				label.setForeground(ColorScheme.BRAND_ORANGE);
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e)
+			{
+				label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			}
+		});
 		return label;
 	}
 
@@ -152,7 +169,7 @@ class PermadeathPanel extends PluginPanel
 
 		JLabel name = new JLabel(row.getArea().getName());
 		name.setFont(FontManager.getRunescapeSmallFont());
-		name.setForeground(java.awt.Color.WHITE);
+		name.setForeground(Color.WHITE);
 		c.gridx = 0;
 		c.weightx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
@@ -167,7 +184,7 @@ class PermadeathPanel extends PluginPanel
 			? ColorScheme.PROGRESS_ERROR_COLOR
 			: ColorScheme.BRAND_ORANGE);
 		count.setToolTipText(row.getHiddenHere() + " hidden on this world"
-			+ (row.getTotal() == null ? "" : ", " + row.getTotal() + " spawns here per the wiki"));
+			+ (row.getTotal() == null ? ", no spawn data yet" : ", " + row.getTotal() + " spawns known in this chunk"));
 		c.gridx = 1;
 		c.weightx = 0;
 		c.fill = GridBagConstraints.NONE;
