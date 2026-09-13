@@ -5,17 +5,17 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import com.npcpermadeath.PermadeathTracker.SpawnOutcome;
-import com.npcpermadeath.PermadeathTracker.SpawnResult;
-import java.util.Arrays;
-import java.util.Collections;
 import org.junit.Before;
 import org.junit.Test;
 
 public class PermadeathTrackerTest
 {
 	private static final int GOBLIN = 3029;
+	private static final String NAME = "Goblin";
+	private static final int LUMBRIDGE = 12850;
 	private static final int WORLD = 301;
-	private static final SpawnKey TILE = new SpawnKey(GOBLIN, 3245, 3245, 0);
+	private static final AreaKey AREA = new AreaKey(NAME, LUMBRIDGE);
+	private static final long NOW = 1_700_000_000_000L;
 
 	private final PermadeathTracker tracker = new PermadeathTracker();
 
@@ -25,207 +25,223 @@ public class PermadeathTrackerTest
 		tracker.setCurrentWorld(WORLD);
 	}
 
-	private void killAndDespawn(int index)
+	private void kill(int index)
 	{
 		tracker.recordMyHit(index);
-		assertTrue(tracker.recordDeath(index, GOBLIN, true, true, 100));
-		assertTrue(tracker.recordDespawn(index, GOBLIN));
+		assertTrue(tracker.recordDeath(index, GOBLIN, NAME, LUMBRIDGE, true, true, 100));
+		assertEquals(AREA, tracker.recordDespawn(index, GOBLIN, NOW));
 	}
 
 	@Test
-	public void npcIsHiddenAsSoonAsItDespawnsDead()
+	public void killIsCountedAndTheNpcHiddenWhenItDespawns()
 	{
-		killAndDespawn(7);
+		kill(7);
 
+		assertEquals(1, tracker.kills(AREA));
 		assertTrue(tracker.isHidden(7, GOBLIN));
-		assertEquals(Collections.singletonList("7:3029:301"), tracker.serializeHidden());
+		assertEquals(SpawnOutcome.EXACT, tracker.recordSpawn(7, GOBLIN, NAME, LUMBRIDGE, NOW));
+		assertTrue(tracker.isDirty());
 	}
 
 	@Test
-	public void deathWithoutDespawnDoesNotHideYet()
+	public void deathWithoutDespawnCountsNothing()
 	{
-		tracker.recordDeath(7, GOBLIN, true, true, 100);
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, true, true, 100);
 
+		assertEquals(0, tracker.kills(AREA));
 		assertFalse(tracker.isHidden(7, GOBLIN));
-		assertTrue(tracker.isPending(7));
-	}
-
-	@Test
-	public void respawnIsHiddenAndSpawnTileLearned()
-	{
-		killAndDespawn(7);
-
-		SpawnResult result = tracker.recordSpawn(7, GOBLIN, TILE, true, 130);
-
-		assertEquals(SpawnOutcome.RESPAWN, result.getOutcome());
-		assertTrue(result.isChanged());
-		assertEquals(Collections.singleton(TILE), tracker.getCulledSpawns());
-	}
-
-	@Test
-	public void untrustedSpawnTileIsNotLearned()
-	{
-		killAndDespawn(7);
-
-		SpawnResult result = tracker.recordSpawn(7, GOBLIN, TILE, false, 130);
-
-		assertEquals(SpawnOutcome.RESPAWN, result.getOutcome());
-		assertFalse(result.isChanged());
-		assertTrue(tracker.getCulledSpawns().isEmpty());
-	}
-
-	@Test
-	public void hiddenNpcWalkingBackIntoViewLaterDoesNotLearnItsTile()
-	{
-		killAndDespawn(7);
-		tracker.recordSpawn(7, GOBLIN, TILE, false, 130);
-		tracker.recordDespawn(7, GOBLIN);
-
-		SpawnResult result = tracker.recordSpawn(7, GOBLIN, new SpawnKey(GOBLIN, 3260, 3250, 0), true, 500);
-
-		assertEquals(SpawnOutcome.RESPAWN, result.getOutcome());
-		assertFalse(result.isChanged());
-		assertTrue(tracker.getCulledSpawns().isEmpty());
 	}
 
 	@Test
 	public void someoneElsesKillIsIgnoredWhenOnlyMineIsOn()
 	{
-		assertFalse(tracker.recordDeath(7, GOBLIN, false, true, 100));
-		assertFalse(tracker.recordDespawn(7, GOBLIN));
-		assertFalse(tracker.isHidden(7, GOBLIN));
+		assertFalse(tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, true, 100));
+		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
+		assertEquals(0, tracker.kills(AREA));
 	}
 
 	@Test
 	public void someoneElsesKillCountsWhenOnlyMineIsOff()
 	{
-		assertTrue(tracker.recordDeath(7, GOBLIN, false, false, 100));
-		assertTrue(tracker.recordDespawn(7, GOBLIN));
-		assertTrue(tracker.isHidden(7, GOBLIN));
+		assertTrue(tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, false, 100));
+		assertEquals(AREA, tracker.recordDespawn(7, GOBLIN, NOW));
+		assertEquals(1, tracker.kills(AREA));
 	}
 
 	@Test
-	public void killSurvivesLogoutAndHop()
+	public void killingAnAlreadyHiddenNpcDoesNotDoubleCount()
 	{
-		killAndDespawn(7);
-		PermadeathTracker fresh = new PermadeathTracker();
-		fresh.loadHidden(tracker.serializeHidden());
+		kill(7);
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, false, false, 200);
 
-		fresh.setCurrentWorld(WORLD + 1);
-		assertTrue(fresh.isHidden(7, GOBLIN));
-		fresh.setAcrossWorlds(false);
-		assertFalse(fresh.isHidden(7, GOBLIN));
-		fresh.setCurrentWorld(WORLD);
-		assertTrue(fresh.isHidden(7, GOBLIN));
+		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
+		assertEquals(1, tracker.kills(AREA));
 	}
 
 	@Test
-	public void differentNpcAtSameIndexOnSameWorldClearsStaleEntry()
+	public void otherNpcsAreSubstitutedUpToTheKillCountOnAnotherWorld()
 	{
-		killAndDespawn(7);
-
-		SpawnResult result = tracker.recordSpawn(7, 9999, null, false, 200);
-
-		assertEquals(SpawnOutcome.VISIBLE, result.getOutcome());
-		assertTrue(result.isChanged());
-		assertFalse(tracker.isHidden(7, 9999));
-		assertFalse(tracker.isHidden(7, GOBLIN));
-		assertTrue(tracker.serializeHidden().isEmpty());
-	}
-
-	@Test
-	public void differentNpcAtSameIndexOnOtherWorldKeepsEntry()
-	{
-		killAndDespawn(7);
+		kill(7);
+		kill(8);
 		tracker.setCurrentWorld(WORLD + 1);
 
-		SpawnResult result = tracker.recordSpawn(7, 9999, null, false, 200);
-
-		assertEquals(SpawnOutcome.VISIBLE, result.getOutcome());
-		assertFalse(result.isChanged());
-		assertFalse(tracker.isHidden(7, 9999));
-		assertEquals(1, tracker.hiddenCount());
+		assertEquals(SpawnOutcome.SUBSTITUTE, tracker.recordSpawn(50, GOBLIN, NAME, LUMBRIDGE, NOW));
+		assertEquals(SpawnOutcome.SUBSTITUTE, tracker.recordSpawn(51, GOBLIN, NAME, LUMBRIDGE, NOW));
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(52, GOBLIN, NAME, LUMBRIDGE, NOW));
+		assertTrue(tracker.isHidden(50, GOBLIN));
+		assertFalse(tracker.isHidden(52, GOBLIN));
+		assertEquals(2, tracker.hiddenHere(AREA));
 	}
 
 	@Test
-	public void rememberedSpawnTileHidesNewIndex()
+	public void substitutesAreStickyWhenTheyComeBackIntoView()
 	{
-		tracker.setCulledSpawns(Collections.singleton(TILE));
+		kill(7);
+		tracker.setCurrentWorld(WORLD + 1);
+		tracker.recordSpawn(50, GOBLIN, NAME, LUMBRIDGE, NOW);
 
-		SpawnResult result = tracker.recordSpawn(42, GOBLIN, TILE, true, 5);
-
-		assertEquals(SpawnOutcome.SPAWN_POINT, result.getOutcome());
-		assertTrue(result.isChanged());
-		assertTrue(tracker.isHidden(42, GOBLIN));
+		assertEquals(SpawnOutcome.EXACT, tracker.recordSpawn(50, GOBLIN, NAME, LUMBRIDGE, NOW + 1));
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(51, GOBLIN, NAME, LUMBRIDGE, NOW + 1));
 	}
 
 	@Test
-	public void differentNpcOnRememberedTileStaysVisible()
+	public void exactKillsOnTheHomeWorldLeaveNoDeficit()
 	{
-		tracker.setCulledSpawns(Collections.singleton(TILE));
-		SpawnKey otherNpcSameTile = new SpawnKey(GOBLIN + 1, TILE.getX(), TILE.getY(), TILE.getPlane());
+		kill(7);
 
-		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(42, GOBLIN + 1, otherNpcSameTile, true, 5).getOutcome());
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(8, GOBLIN, NAME, LUMBRIDGE, NOW));
 	}
 
 	@Test
-	public void despawnOfDifferentNpcIdDoesNotHide()
+	public void killsInOneRegionDoNotHideNpcsInAnother()
 	{
-		tracker.recordDeath(7, GOBLIN, true, true, 100);
+		kill(7);
 
-		assertFalse(tracker.recordDespawn(7, 9999));
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(8, GOBLIN, NAME, LUMBRIDGE + 1, NOW));
+	}
+
+	@Test
+	public void killsOfOneTypeDoNotHideAnotherType()
+	{
+		kill(7);
+
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(8, 2, "Cow", LUMBRIDGE, NOW));
+	}
+
+	@Test
+	public void renumberedIndexIsReleasedAndBackfilled()
+	{
+		kill(7);
+
+		assertEquals(SpawnOutcome.VISIBLE, tracker.recordSpawn(7, 2, "Cow", LUMBRIDGE, NOW));
 		assertFalse(tracker.isHidden(7, GOBLIN));
+		assertEquals(0, tracker.hiddenHere(AREA));
+		assertEquals(SpawnOutcome.SUBSTITUTE, tracker.recordSpawn(9, GOBLIN, NAME, LUMBRIDGE, NOW));
 	}
 
 	@Test
-	public void staleDeathsArePruned()
+	public void staleRecordsArePrunedSoTheCountCanBeRefilled()
 	{
-		tracker.recordDeath(7, GOBLIN, true, true, 100);
-		tracker.prunePending(100 + PermadeathTracker.PENDING_TTL_TICKS + 1);
+		kill(7);
 
-		assertFalse(tracker.isPending(7));
-		assertFalse(tracker.recordDespawn(7, GOBLIN));
+		tracker.prune(0, NOW + PermadeathTracker.RECORD_TTL_MS + 1);
+
+		assertFalse(tracker.isHidden(7, GOBLIN));
+		assertEquals(1, tracker.kills(AREA));
+		assertEquals(SpawnOutcome.SUBSTITUTE, tracker.recordSpawn(9, GOBLIN, NAME, LUMBRIDGE, NOW));
 	}
 
 	@Test
-	public void clearSessionKeepsHiddenAndSpawns()
+	public void seeingARecordRefreshesIt()
 	{
-		killAndDespawn(7);
-		tracker.recordSpawn(7, GOBLIN, TILE, true, 130);
+		kill(7);
+		long later = NOW + PermadeathTracker.RECORD_TTL_MS - 1;
+		tracker.recordSpawn(7, GOBLIN, NAME, LUMBRIDGE, later);
 
-		tracker.clearSession();
+		tracker.prune(0, later + 10);
 
 		assertTrue(tracker.isHidden(7, GOBLIN));
-		assertEquals(Collections.singleton(TILE), tracker.getCulledSpawns());
+	}
+
+	@Test
+	public void stalePendingDeathsArePruned()
+	{
+		tracker.recordDeath(7, GOBLIN, NAME, LUMBRIDGE, true, true, 100);
+		tracker.prune(100 + PermadeathTracker.PENDING_TTL_TICKS + 1, NOW);
+
+		assertFalse(tracker.isPending(7));
+		assertNull(tracker.recordDespawn(7, GOBLIN, NOW));
+	}
+
+	@Test
+	public void stateRoundTripsThroughSavedState()
+	{
+		kill(7);
+		tracker.setCurrentWorld(WORLD + 1);
+		tracker.recordSpawn(50, GOBLIN, NAME, LUMBRIDGE, NOW);
+		PermadeathTracker.SavedState saved = tracker.toSaved();
+		assertEquals(Integer.valueOf(1), saved.kills.get("12850/Goblin"));
+		assertEquals(2, saved.hidden.size());
+
+		PermadeathTracker fresh = new PermadeathTracker();
+		fresh.setCurrentWorld(WORLD);
+		fresh.load(saved);
+
+		assertTrue(fresh.isHidden(7, GOBLIN));
+		assertFalse(fresh.isHidden(50, GOBLIN));
+		assertEquals(1, fresh.hiddenHere(AREA));
+		fresh.setCurrentWorld(WORLD + 1);
+		assertTrue(fresh.isHidden(50, GOBLIN));
+		assertFalse(fresh.isDirty());
+	}
+
+	@Test
+	public void loadSkipsMalformedEntries()
+	{
+		PermadeathTracker.SavedState saved = new PermadeathTracker.SavedState();
+		saved.kills.put("garbage", 3);
+		saved.kills.put("12850/Goblin", 0);
+		saved.kills.put("12851/Cow", 2);
+		saved.hidden.add(new PermadeathTracker.HiddenNpc(1, 2, WORLD, null, 12851, NOW));
+
+		tracker.load(saved);
+
+		assertEquals(2, tracker.totalKills());
+		assertEquals(0, tracker.hiddenHere(new AreaKey("Cow", 12851)));
+	}
+
+	@Test
+	public void killsInRegionListsOnlyThatRegion()
+	{
+		kill(7);
+		tracker.recordDeath(8, 2, "Cow", LUMBRIDGE + 1, true, true, 100);
+		tracker.recordDespawn(8, 2, NOW);
+
+		assertEquals(1, tracker.killsInRegion(LUMBRIDGE).size());
+		assertEquals(Integer.valueOf(1), tracker.killsInRegion(LUMBRIDGE).get(NAME));
 	}
 
 	@Test
 	public void clearAllForgetsEverything()
 	{
-		killAndDespawn(7);
-		tracker.recordSpawn(7, GOBLIN, TILE, true, 130);
+		kill(7);
+		tracker.markSaved();
 
 		tracker.clearAll();
 
 		assertFalse(tracker.isHidden(7, GOBLIN));
-		assertTrue(tracker.getCulledSpawns().isEmpty());
+		assertEquals(0, tracker.totalKills());
+		assertTrue(tracker.isDirty());
+		assertTrue(tracker.toSaved().isEmpty());
 	}
 
 	@Test
-	public void loadHiddenSkipsMalformedEntries()
+	public void areaKeyRoundTrips()
 	{
-		tracker.loadHidden(Arrays.asList("7:3029:301", "garbage", "1:2", "a:b:c", "8:3030:302"));
-
-		assertEquals(2, tracker.hiddenCount());
-		assertTrue(tracker.isHidden(8, 3030));
-	}
-
-	@Test
-	public void spawnKeyRoundTrips()
-	{
-		assertEquals(TILE, SpawnKey.parse(TILE.serialize()));
-		assertNull(SpawnKey.parse("garbage"));
-		assertNull(SpawnKey.parse("1:2:3"));
-		assertNull(SpawnKey.parse("a:b:c:d"));
+		assertEquals(AREA, AreaKey.parse(AREA.serialize()));
+		assertEquals(new AreaKey("Monk of Zamorak", 1), AreaKey.parse("1/Monk of Zamorak"));
+		assertNull(AreaKey.parse("garbage"));
+		assertNull(AreaKey.parse("12850/"));
+		assertNull(AreaKey.parse("x/Goblin"));
 	}
 }

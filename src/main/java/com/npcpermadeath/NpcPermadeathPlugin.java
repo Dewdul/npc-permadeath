@@ -1,9 +1,11 @@
 package com.npcpermadeath;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 import com.google.inject.Provides;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -32,23 +34,20 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
+import okhttp3.OkHttpClient;
 
 @Slf4j
 @PluginDescriptor(
 	name = "NPC Permadeath",
-	description = "NPCs you kill stay dead: once you have slain an NPC it is hidden when it respawns, so areas slowly empty out",
+	description = "NPCs you kill stay dead: every kill keeps one more NPC of that kind hidden in the area, so places slowly empty out",
 	tags = {"npc", "hide", "kill", "respawn", "permadeath", "entity", "hider", "immersion"}
 )
 public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 {
-	static final String KEY_HIDDEN_NPCS = "hiddenNpcs";
-	static final String KEY_CULLED_SPAWNS = "culledSpawns";
+	static final String KEY_STATE = "state";
 
-	/** NPCs walking into view appear about 15 tiles out; a respawn is closer. */
-	private static final int LEARN_MAX_DISTANCE = 13;
-	/** Moving further than this in one tick means the player teleported. */
-	private static final int TELEPORT_DISTANCE = 2;
-	private static final int NPC_LIST_LIMIT = 12;
+	private static final int PRUNE_INTERVAL_TICKS = 100;
+	private static final int SAVE_INTERVAL_TICKS = 200;
 
 	@Inject
 	private Client client;
@@ -65,11 +64,19 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Inject
 	private NpcPermadeathConfig config;
 
+	@Inject
+	private OkHttpClient okHttpClient;
+
+	@Inject
+	private Gson gson;
+
 	private final PermadeathTracker tracker = new PermadeathTracker();
+	private SpawnTotals totals;
 
 	private List<String> nameFilter = new ArrayList<>();
 	private int currentWorld = -1;
-	private WorldPoint lastPlayerLocation;
+	private boolean loaded;
+	private int tickCounter;
 
 	@Provides
 	NpcPermadeathConfig provideConfig(ConfigManager configManager)
@@ -81,7 +88,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	protected void startUp()
 	{
 		nameFilter = parseNames(config.npcNames());
-		tracker.setAcrossWorlds(config.acrossWorlds());
+		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
+		totals.load();
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
@@ -96,9 +104,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	protected void shutDown()
 	{
 		renderCallbackManager.unregister(this);
+		saveIfDirty();
 		tracker.clearAll();
+		tracker.markSaved();
+		loaded = false;
 		currentWorld = -1;
-		lastPlayerLocation = null;
 	}
 
 	/** Called by the client for every entity about to be drawn; false skips it. */
@@ -139,72 +149,73 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			handleDeath(npc);
 		}
-		if (tracker.recordDespawn(npc.getIndex(), npc.getId()))
+		AreaKey area = tracker.recordDespawn(npc.getIndex(), npc.getId(), now());
+		if (area != null)
 		{
-			log.debug("{} (id {}, index {}) is now permanently dead", npc.getName(), npc.getId(), npc.getIndex());
+			log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), npc.getIndex());
 			saveState();
+			announce(area);
+			totals.ensure(area.getName(), now(), () -> announce(area));
 		}
 	}
 
 	private void handleDeath(NPC npc)
 	{
 		int index = npc.getIndex();
-		if (tracker.isPending(index) || !matchesFilter(npc.getName()))
+		if (tracker.isPending(index) || inInstance())
+		{
+			return;
+		}
+		String name = cleanName(npc);
+		WorldPoint location = npc.getWorldLocation();
+		if (name == null || location == null || !matchesFilter(name))
 		{
 			return;
 		}
 		Player local = client.getLocalPlayer();
 		boolean killedByMe = tracker.wasDamagedByMe(index) || (local != null && npc.getInteracting() == local);
-		tracker.recordDeath(index, npc.getId(), killedByMe, config.onlyMyKills(), client.getTickCount());
+		tracker.recordDeath(index, npc.getId(), name, location.getRegionID(), killedByMe, config.onlyMyKills(),
+			client.getTickCount());
 	}
 
 	@Subscribe
 	public void onNpcSpawned(NpcSpawned event)
 	{
-		NPC npc = event.getNpc();
-		WorldPoint location = npc.getWorldLocation();
-		SpawnKey key = location == null ? null : SpawnKey.of(npc.getId(), location);
-		boolean canLearn = config.rememberSpawns() && location != null && isTrustworthySpawnTile(location);
-
-		PermadeathTracker.SpawnResult result = tracker.recordSpawn(
-			npc.getIndex(), npc.getId(), key, canLearn, client.getTickCount());
-
-		if (result.getOutcome() != PermadeathTracker.SpawnOutcome.VISIBLE)
-		{
-			log.debug("Hiding {} (id {}, index {}): {}", npc.getName(), npc.getId(), npc.getIndex(), result.getOutcome());
-		}
-		if (result.isChanged())
-		{
-			saveState();
-		}
+		considerNpc(event.getNpc());
 	}
 
-	/**
-	 * A respawn happens on the NPC's spawn tile, but an NPC can also appear
-	 * because it walked into range or because the player teleported next to
-	 * it. Only trust the tile when neither of those explains the spawn.
-	 */
-	private boolean isTrustworthySpawnTile(WorldPoint npcLocation)
+	private void considerNpc(NPC npc)
 	{
-		Player local = client.getLocalPlayer();
-		if (local == null || client.getTopLevelWorldView().isInstance())
+		if (inInstance())
 		{
-			return false;
+			return;
 		}
-		WorldPoint playerLocation = local.getWorldLocation();
-		if (playerLocation == null || npcLocation.distanceTo(playerLocation) > LEARN_MAX_DISTANCE)
+		String name = cleanName(npc);
+		WorldPoint location = npc.getWorldLocation();
+		if (name == null || location == null)
 		{
-			return false;
+			return;
 		}
-		return lastPlayerLocation != null && playerLocation.distanceTo(lastPlayerLocation) <= TELEPORT_DISTANCE;
+		PermadeathTracker.SpawnOutcome outcome = tracker.recordSpawn(
+			npc.getIndex(), npc.getId(), name, location.getRegionID(), now());
+		if (outcome != PermadeathTracker.SpawnOutcome.VISIBLE)
+		{
+			log.debug("Hiding {} (id {}, index {}): {}", name, npc.getId(), npc.getIndex(), outcome);
+		}
 	}
 
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
-		Player local = client.getLocalPlayer();
-		lastPlayerLocation = local == null ? null : local.getWorldLocation();
-		tracker.prunePending(client.getTickCount());
+		tickCounter++;
+		if (tickCounter % PRUNE_INTERVAL_TICKS == 0)
+		{
+			tracker.prune(client.getTickCount(), now());
+		}
+		if (tickCounter % SAVE_INTERVAL_TICKS == 0)
+		{
+			saveIfDirty();
+		}
 	}
 
 	@Subscribe
@@ -217,8 +228,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				break;
 			case HOPPING:
 			case LOGIN_SCREEN:
+				saveIfDirty();
 				tracker.clearSession();
-				lastPlayerLocation = null;
 				currentWorld = -1;
 				break;
 			default:
@@ -230,12 +241,16 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		if (world != currentWorld)
 		{
+			saveIfDirty();
 			// In-flight deaths only mean something on the world they happened on.
 			tracker.clearSession();
 			currentWorld = world;
+			tracker.setCurrentWorld(world);
 		}
-		tracker.setCurrentWorld(world);
-		loadState();
+		if (!loaded)
+		{
+			loadState();
+		}
 	}
 
 	@Subscribe
@@ -251,23 +266,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		switch (event.getKey())
+		if ("npcNames".equals(event.getKey()))
 		{
-			case "npcNames":
-				nameFilter = parseNames(config.npcNames());
-				break;
-			case "acrossWorlds":
-				tracker.setAcrossWorlds(config.acrossWorlds());
-				break;
-			case NpcPermadeathConfig.KEY_FORGET_ALL:
-				if (config.forgetAll())
-				{
-					configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
-					clientThread.invoke(this::forgetAll);
-				}
-				break;
-			default:
-				break;
+			nameFilter = parseNames(config.npcNames());
+		}
+		else if (NpcPermadeathConfig.KEY_FORGET_ALL.equals(event.getKey()) && config.forgetAll())
+		{
+			configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
+			clientThread.invoke(this::forgetAll);
 		}
 	}
 
@@ -279,53 +285,51 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			return;
 		}
 		String[] args = event.getArguments();
-		String sub = args.length > 0 ? args[0].toLowerCase() : "";
-		switch (sub)
+		if (args.length > 0 && "reset".equalsIgnoreCase(args[0]))
 		{
-			case "reset":
-				forgetAll();
-				break;
-			case "npcs":
-				listNearbyNpcs();
-				break;
-			default:
-				message("NPC Permadeath: " + tracker.hiddenCount() + " slain NPC(s) remembered, "
-					+ tracker.getCulledSpawns().size() + " spawn tile(s) learned. "
-					+ "::permadeath npcs lists nearby NPC indices, ::permadeath reset forgets everything.");
-				break;
+			forgetAll();
+			return;
 		}
+		summarizeHere();
 	}
 
-	/** Prints nearby NPCs with their indices, for checking index stability between worlds. */
-	private void listNearbyNpcs()
+	private void summarizeHere()
 	{
 		Player local = client.getLocalPlayer();
-		if (local == null)
+		WorldPoint here = local == null ? null : local.getWorldLocation();
+		if (here == null)
 		{
 			return;
 		}
-		WorldPoint here = local.getWorldLocation();
-		List<NPC> npcs = new ArrayList<>();
-		for (NPC npc : client.getTopLevelWorldView().npcs())
+		int region = here.getRegionID();
+		Map<String, Integer> kills = tracker.killsInRegion(region);
+		if (kills.isEmpty())
 		{
-			if (npc.getName() != null && npc.getWorldLocation() != null)
-			{
-				npcs.add(npc);
-			}
+			message("NPC Permadeath: nothing slain in this area yet. " + tracker.totalKills()
+				+ " kill(s) remembered overall. ::permadeath reset forgets them all.");
+			return;
 		}
-		npcs.sort(Comparator.comparingInt(n -> n.getWorldLocation().distanceTo(here)));
-		if (npcs.size() > NPC_LIST_LIMIT)
+		message("NPC Permadeath, this area:");
+		kills.forEach((name, count) ->
 		{
-			npcs = npcs.subList(0, NPC_LIST_LIMIT);
-		}
-		message("World " + client.getWorld() + ", nearest NPCs (name, id, index, tile):");
-		for (NPC npc : npcs)
+			AreaKey area = new AreaKey(name, region);
+			message(name + ": " + count + totalSuffix(area) + " slain, " + tracker.hiddenHere(area) + " hidden here");
+		});
+	}
+
+	private void announce(AreaKey area)
+	{
+		if (!config.announceKills())
 		{
-			WorldPoint p = npc.getWorldLocation();
-			String hidden = tracker.isHidden(npc.getIndex(), npc.getId()) ? " [hidden]" : "";
-			message(Text.removeTags(npc.getName()) + " id " + npc.getId() + " #" + npc.getIndex()
-				+ " @ " + p.getX() + "," + p.getY() + "," + p.getPlane() + hidden);
+			return;
 		}
+		message(area.getName() + ": " + tracker.kills(area) + totalSuffix(area) + " slain in this area");
+	}
+
+	private String totalSuffix(AreaKey area)
+	{
+		Integer total = totals.get(area.getName(), area.getRegion());
+		return total == null ? "" : " of " + total;
 	}
 
 	private void forgetAll()
@@ -337,58 +341,73 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 
 	private void loadState()
 	{
-		tracker.loadHidden(loadList(KEY_HIDDEN_NPCS));
-		List<SpawnKey> spawns = new ArrayList<>();
-		for (String entry : loadList(KEY_CULLED_SPAWNS))
+		PermadeathTracker.SavedState state = null;
+		String json = configManager.getRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_STATE);
+		if (json != null)
 		{
-			SpawnKey key = SpawnKey.parse(entry);
-			if (key != null)
+			try
 			{
-				spawns.add(key);
+				state = gson.fromJson(json, PermadeathTracker.SavedState.class);
+			}
+			catch (JsonSyntaxException e)
+			{
+				log.warn("Discarding unreadable NPC Permadeath state", e);
 			}
 		}
-		tracker.setCulledSpawns(spawns);
-		log.debug("Loaded {} slain NPCs and {} spawn tiles", tracker.hiddenCount(), spawns.size());
-	}
-
-	private List<String> loadList(String key)
-	{
-		String stored = configManager.getRSProfileConfiguration(NpcPermadeathConfig.GROUP, key);
-		return stored == null ? new ArrayList<>() : Text.fromCSV(stored);
+		tracker.load(state == null ? new PermadeathTracker.SavedState() : state);
+		loaded = true;
+		log.debug("Loaded {} kills", tracker.totalKills());
+		// NPCs already in view spawned before the state was known.
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			considerNpc(npc);
+		}
 	}
 
 	private void saveState()
 	{
-		saveList(KEY_HIDDEN_NPCS, tracker.serializeHidden());
-		saveList(KEY_CULLED_SPAWNS, tracker.getCulledSpawns().stream()
-			.map(SpawnKey::serialize)
-			.sorted()
-			.collect(Collectors.toList()));
-	}
-
-	private void saveList(String key, List<String> entries)
-	{
-		if (entries.isEmpty())
+		PermadeathTracker.SavedState state = tracker.toSaved();
+		if (state.isEmpty())
 		{
-			configManager.unsetRSProfileConfiguration(NpcPermadeathConfig.GROUP, key);
+			configManager.unsetRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_STATE);
 		}
 		else
 		{
-			configManager.setRSProfileConfiguration(NpcPermadeathConfig.GROUP, key, String.join(",", entries));
+			configManager.setRSProfileConfiguration(NpcPermadeathConfig.GROUP, KEY_STATE, gson.toJson(state));
+		}
+		tracker.markSaved();
+	}
+
+	private void saveIfDirty()
+	{
+		if (loaded && tracker.isDirty())
+		{
+			saveState();
 		}
 	}
 
-	private boolean matchesFilter(String npcName)
+	private boolean inInstance()
+	{
+		return client.getTopLevelWorldView().isInstance();
+	}
+
+	private static String cleanName(NPC npc)
+	{
+		String name = npc.getName();
+		if (name == null)
+		{
+			return null;
+		}
+		String clean = Text.removeTags(name).trim();
+		return clean.isEmpty() ? null : clean;
+	}
+
+	private boolean matchesFilter(String name)
 	{
 		if (nameFilter.isEmpty())
 		{
 			return true;
 		}
-		if (npcName == null)
-		{
-			return false;
-		}
-		String name = Text.removeTags(npcName);
 		for (String pattern : nameFilter)
 		{
 			if (WildcardMatcher.matches(pattern, name))
@@ -405,6 +424,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.map(String::trim)
 			.filter(s -> !s.isEmpty())
 			.collect(Collectors.toList());
+	}
+
+	private static long now()
+	{
+		return System.currentTimeMillis();
 	}
 
 	private void message(String text)

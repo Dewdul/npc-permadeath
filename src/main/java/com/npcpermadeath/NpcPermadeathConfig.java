@@ -13,7 +13,7 @@ public interface NpcPermadeathConfig extends Config
 	@ConfigItem(
 		keyName = "onlyMyKills",
 		name = "Only NPCs you killed",
-		description = "Only hide NPCs you damaged or were fighting when they died. When off, every NPC you see die stays dead.",
+		description = "Only count NPCs you damaged or were fighting when they died. When off, every NPC you see die counts.",
 		position = 0
 	)
 	default boolean onlyMyKills()
@@ -22,23 +22,12 @@ public interface NpcPermadeathConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "rememberSpawns",
-		name = "Learn spawn tiles",
-		description = "When a slain NPC is seen respawning, also remember its spawn tile so the same spawn stays hidden even if the server renumbers NPCs.",
+		keyName = "announceKills",
+		name = "Announce kills in chat",
+		description = "After each kill, show how many of that NPC are slain in the area, e.g. \"Goblin: 12 of 53 slain in this area\".",
 		position = 1
 	)
-	default boolean rememberSpawns()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "acrossWorlds",
-		name = "Apply on every world",
-		description = "Kills are remembered by NPC number. On, that number hides the matching NPC on any world; off, only on the world you killed it on.",
-		position = 2
-	)
-	default boolean acrossWorlds()
+	default boolean announceKills()
 	{
 		return true;
 	}
@@ -47,7 +36,7 @@ public interface NpcPermadeathConfig extends Config
 		keyName = "npcNames",
 		name = "Only these NPCs",
 		description = "Comma-separated NPC names this applies to (wildcards * allowed). Leave blank for every NPC.",
-		position = 3
+		position = 2
 	)
 	default String npcNames()
 	{
@@ -57,8 +46,8 @@ public interface NpcPermadeathConfig extends Config
 	@ConfigItem(
 		keyName = KEY_FORGET_ALL,
 		name = "Forget all slain NPCs",
-		description = "Tick to bring every hidden NPC back and clear the saved list. Unticks itself.",
-		position = 4
+		description = "Tick to bring every hidden NPC back and clear all kill counts. Unticks itself.",
+		position = 3
 	)
 	default boolean forgetAll()
 	{

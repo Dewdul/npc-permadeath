@@ -1,89 +1,119 @@
 package com.npcpermadeath;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import lombok.Value;
 
 /**
  * Pure bookkeeping for which NPCs should be hidden. Knows nothing about the
  * client so it can be unit tested.
  *
- * <p>The client never sees a permanent NPC identity, only the server's NPC
- * <em>index</em>. The server keeps a slain static NPC's index for its respawn,
- * so a kill is recorded as {@code index + npc id} the moment the dead NPC
- * despawns, whether or not the player sticks around for the respawn. That
- * record is persisted and applied on every later login. Whenever a hidden
- * NPC is actually seen respawning, its spawn tile is learned as well, which
- * is an identity that survives even if indices get reshuffled.
+ * <p>The authoritative record is a <em>kill count</em> per NPC type per map
+ * region. The plugin then keeps exactly that many NPCs of that type hidden in
+ * the region. It prefers the individuals that were actually killed, which it
+ * recognises by the server's NPC index (kept across death and respawn on one
+ * world), and when those cannot be found, for example on another world, it
+ * substitutes other NPCs of the same type as they come into view. Hidden
+ * choices are sticky so the same NPCs stay hidden as you move around.
  */
 class PermadeathTracker
 {
 	/** A death older than this is forgotten if the NPC never despawned. */
 	static final int PENDING_TTL_TICKS = 6000;
+	/** A hidden record not seen for this long is dropped so counts self-heal. */
+	static final long RECORD_TTL_MS = 14L * 24 * 60 * 60 * 1000;
+
+	enum SpawnOutcome
+	{
+		VISIBLE,
+		/** Hidden because this is an NPC that was recorded hidden before. */
+		EXACT,
+		/** Hidden to bring the area up to its kill count. */
+		SUBSTITUTE
+	}
+
+	/** One hidden NPC on one world. Plain fields so Gson can persist it. */
+	static class HiddenNpc
+	{
+		int index;
+		int npcId;
+		int world;
+		String name;
+		int region;
+		long lastSeen;
+
+		HiddenNpc()
+		{
+		}
+
+		HiddenNpc(int index, int npcId, int world, String name, int region, long lastSeen)
+		{
+			this.index = index;
+			this.npcId = npcId;
+			this.world = world;
+			this.name = name;
+			this.region = region;
+			this.lastSeen = lastSeen;
+		}
+
+		AreaKey area()
+		{
+			return new AreaKey(name, region);
+		}
+	}
+
+	/** Everything that is persisted. */
+	static class SavedState
+	{
+		Map<String, Integer> kills = new TreeMap<>();
+		List<HiddenNpc> hidden = new ArrayList<>();
+
+		boolean isEmpty()
+		{
+			return kills.isEmpty() && hidden.isEmpty();
+		}
+	}
 
 	@Value
 	static class PendingDeath
 	{
 		int npcId;
+		String name;
+		int region;
 		int tick;
-	}
-
-	/** A slain NPC, remembered by index. */
-	@Value
-	static class HiddenNpc
-	{
-		int npcId;
-		/** World the kill happened on, so stale entries can be recognised. */
-		int world;
-
-		String serialize()
-		{
-			return npcId + ":" + world;
-		}
-	}
-
-	enum SpawnOutcome
-	{
-		VISIBLE,
-		/** Hidden because a slain NPC with this index came back. */
-		RESPAWN,
-		/** Hidden because it appeared on a remembered spawn tile. */
-		SPAWN_POINT
-	}
-
-	@Value
-	static class SpawnResult
-	{
-		SpawnOutcome outcome;
-		/** True when persisted state changed and should be saved. */
-		boolean changed;
 	}
 
 	private final Set<Integer> damagedByMe = new HashSet<>();
 	private final Map<Integer, PendingDeath> pending = new HashMap<>();
-	/** Indices whose NPC despawned dead this session and has not been seen since. */
-	private final Map<Integer, Integer> awaitingRespawn = new HashMap<>();
-	private final Map<Integer, HiddenNpc> hidden = new HashMap<>();
-	private final Set<SpawnKey> culledSpawns = new HashSet<>();
+
+	private final Map<AreaKey, Integer> kills = new HashMap<>();
+	/** world -> index -> record */
+	private final Map<Integer, Map<Integer, HiddenNpc>> hidden = new HashMap<>();
+	/** Hidden records on the current world, counted per area. */
+	private final Map<AreaKey, Integer> hiddenHere = new HashMap<>();
 
 	private int currentWorld = -1;
-	private boolean acrossWorlds = true;
+	private boolean dirty;
 
 	void setCurrentWorld(int world)
 	{
 		currentWorld = world;
+		hiddenHere.clear();
+		for (HiddenNpc rec : here().values())
+		{
+			hiddenHere.merge(rec.area(), 1, Integer::sum);
+		}
 	}
 
-	/** Whether kills recorded on other worlds also hide NPCs here. */
-	void setAcrossWorlds(boolean acrossWorlds)
+	private Map<Integer, HiddenNpc> here()
 	{
-		this.acrossWorlds = acrossWorlds;
+		return hidden.computeIfAbsent(currentWorld, w -> new HashMap<>());
 	}
 
 	void recordMyHit(int index)
@@ -97,17 +127,17 @@ class PermadeathTracker
 	}
 
 	/**
-	 * Marks an NPC as slain. It becomes hidden once it despawns.
+	 * Marks an NPC as slain. It is counted once it despawns.
 	 *
 	 * @return true if the death is now being tracked
 	 */
-	boolean recordDeath(int index, int npcId, boolean killedByMe, boolean requireMine, int tick)
+	boolean recordDeath(int index, int npcId, String name, int region, boolean killedByMe, boolean requireMine, int tick)
 	{
 		if (requireMine && !killedByMe)
 		{
 			return false;
 		}
-		pending.put(index, new PendingDeath(npcId, tick));
+		pending.put(index, new PendingDeath(npcId, name, region, tick));
 		return true;
 	}
 
@@ -117,85 +147,141 @@ class PermadeathTracker
 	}
 
 	/**
-	 * @return true if the NPC is now hidden and state should be saved
+	 * Counts the kill if this despawn is a tracked death.
+	 *
+	 * @return the area the kill was counted in, or null if nothing was counted
 	 */
-	boolean recordDespawn(int index, int npcId)
+	AreaKey recordDespawn(int index, int npcId, long now)
 	{
 		damagedByMe.remove(index);
 		PendingDeath death = pending.remove(index);
 		if (death == null || death.getNpcId() != npcId)
 		{
-			return false;
+			return null;
 		}
-		hidden.put(index, new HiddenNpc(npcId, currentWorld));
-		awaitingRespawn.put(index, death.getTick());
-		return true;
-	}
-
-	/**
-	 * @param location the tile the NPC appeared on, or null if unknown
-	 * @param canLearn whether the tile is trustworthy as a spawn tile
-	 */
-	SpawnResult recordSpawn(int index, int npcId, SpawnKey location, boolean canLearn, int tick)
-	{
-		Integer deathTick = awaitingRespawn.remove(index);
-		HiddenNpc entry = hidden.get(index);
-		if (entry != null)
+		HiddenNpc existing = here().get(index);
+		if (existing != null)
 		{
-			if (entry.getNpcId() == npcId)
-			{
-				if (!appliesHere(entry))
-				{
-					return new SpawnResult(SpawnOutcome.VISIBLE, false);
-				}
-				boolean learned = false;
-				if (deathTick != null && canLearn && location != null && tick - deathTick <= PENDING_TTL_TICKS)
-				{
-					learned = culledSpawns.add(location);
-				}
-				return new SpawnResult(SpawnOutcome.RESPAWN, learned);
-			}
-			if (entry.getWorld() == currentWorld)
-			{
-				// Same world, same index, different NPC: the server reshuffled.
-				hidden.remove(index);
-				return checkSpawnPoint(index, npcId, location, true);
-			}
+			// It was already one of ours (hidden and killed by someone else).
+			existing.lastSeen = now;
+			return null;
 		}
-		return checkSpawnPoint(index, npcId, location, false);
+		AreaKey key = new AreaKey(death.getName(), death.getRegion());
+		kills.merge(key, 1, Integer::sum);
+		put(new HiddenNpc(index, npcId, currentWorld, death.getName(), death.getRegion(), now));
+		dirty = true;
+		return key;
 	}
 
-	private SpawnResult checkSpawnPoint(int index, int npcId, SpawnKey location, boolean changed)
+	SpawnOutcome recordSpawn(int index, int npcId, String name, int region, long now)
 	{
-		if (location != null && culledSpawns.contains(location))
+		HiddenNpc rec = here().get(index);
+		if (rec != null)
 		{
-			hidden.put(index, new HiddenNpc(npcId, currentWorld));
-			return new SpawnResult(SpawnOutcome.SPAWN_POINT, true);
+			if (rec.npcId == npcId)
+			{
+				rec.lastSeen = now;
+				return SpawnOutcome.EXACT;
+			}
+			// Same world, same index, different NPC: the server renumbered.
+			remove(index);
+			dirty = true;
 		}
-		return new SpawnResult(SpawnOutcome.VISIBLE, changed);
+		AreaKey key = new AreaKey(name, region);
+		int wanted = kills.getOrDefault(key, 0);
+		if (wanted == 0)
+		{
+			return SpawnOutcome.VISIBLE;
+		}
+		if (hiddenHere.getOrDefault(key, 0) < wanted)
+		{
+			put(new HiddenNpc(index, npcId, currentWorld, name, region, now));
+			dirty = true;
+			return SpawnOutcome.SUBSTITUTE;
+		}
+		return SpawnOutcome.VISIBLE;
 	}
 
-	private boolean appliesHere(HiddenNpc entry)
+	private void put(HiddenNpc rec)
 	{
-		return acrossWorlds || entry.getWorld() == currentWorld;
+		HiddenNpc previous = here().put(rec.index, rec);
+		if (previous != null)
+		{
+			decrement(previous.area());
+		}
+		hiddenHere.merge(rec.area(), 1, Integer::sum);
+	}
+
+	private void remove(int index)
+	{
+		HiddenNpc previous = here().remove(index);
+		if (previous != null)
+		{
+			decrement(previous.area());
+		}
+	}
+
+	private void decrement(AreaKey key)
+	{
+		hiddenHere.computeIfPresent(key, (k, n) -> n <= 1 ? null : n - 1);
 	}
 
 	boolean isHidden(int index, int npcId)
 	{
-		HiddenNpc entry = hidden.get(index);
-		return entry != null && entry.getNpcId() == npcId && appliesHere(entry);
+		HiddenNpc rec = here().get(index);
+		return rec != null && rec.npcId == npcId;
 	}
 
-	int hiddenCount()
+	int kills(AreaKey key)
 	{
-		return hidden.size();
+		return kills.getOrDefault(key, 0);
 	}
 
-	/** Drops deaths whose NPC never despawned. */
-	void prunePending(int tick)
+	int hiddenHere(AreaKey key)
+	{
+		return hiddenHere.getOrDefault(key, 0);
+	}
+
+	int totalKills()
+	{
+		return kills.values().stream().mapToInt(Integer::intValue).sum();
+	}
+
+	/** Kill counts for every NPC type in one region, sorted by name. */
+	Map<String, Integer> killsInRegion(int region)
+	{
+		Map<String, Integer> out = new TreeMap<>();
+		kills.forEach((key, n) ->
+		{
+			if (key.getRegion() == region)
+			{
+				out.put(key.getName(), n);
+			}
+		});
+		return out;
+	}
+
+	/** Drops deaths whose NPC never despawned and hidden records gone stale. */
+	void prune(int tick, long now)
 	{
 		pending.values().removeIf(d -> tick - d.getTick() > PENDING_TTL_TICKS);
-		awaitingRespawn.values().removeIf(t -> tick - t > PENDING_TTL_TICKS);
+		for (Map.Entry<Integer, Map<Integer, HiddenNpc>> world : hidden.entrySet())
+		{
+			Iterator<HiddenNpc> it = world.getValue().values().iterator();
+			while (it.hasNext())
+			{
+				HiddenNpc rec = it.next();
+				if (now - rec.lastSeen > RECORD_TTL_MS)
+				{
+					it.remove();
+					dirty = true;
+					if (world.getKey() == currentWorld)
+					{
+						decrement(rec.area());
+					}
+				}
+			}
+		}
 	}
 
 	/** Forgets in-flight state that only means something on one world. */
@@ -203,55 +289,64 @@ class PermadeathTracker
 	{
 		damagedByMe.clear();
 		pending.clear();
-		awaitingRespawn.clear();
 	}
 
 	void clearAll()
 	{
 		clearSession();
+		kills.clear();
 		hidden.clear();
-		culledSpawns.clear();
+		hiddenHere.clear();
+		dirty = true;
 	}
 
-	Set<SpawnKey> getCulledSpawns()
+	boolean isDirty()
 	{
-		return Collections.unmodifiableSet(culledSpawns);
+		return dirty;
 	}
 
-	void setCulledSpawns(Collection<SpawnKey> spawns)
+	void markSaved()
 	{
-		culledSpawns.clear();
-		culledSpawns.addAll(spawns);
+		dirty = false;
 	}
 
-	/** Serializes hidden NPCs as {@code index:npcId:world} entries, sorted. */
-	List<String> serializeHidden()
+	SavedState toSaved()
 	{
-		List<String> out = new ArrayList<>();
-		hidden.forEach((index, entry) -> out.add(index + ":" + entry.serialize()));
-		Collections.sort(out);
-		return out;
-	}
-
-	void loadHidden(Collection<String> entries)
-	{
-		hidden.clear();
-		for (String entry : entries)
+		SavedState state = new SavedState();
+		kills.forEach((key, n) -> state.kills.put(key.serialize(), n));
+		for (Map<Integer, HiddenNpc> world : hidden.values())
 		{
-			String[] parts = entry.trim().split(":");
-			if (parts.length != 3)
+			state.hidden.addAll(world.values());
+		}
+		return state;
+	}
+
+	void load(SavedState state)
+	{
+		kills.clear();
+		hidden.clear();
+		if (state.kills != null)
+		{
+			state.kills.forEach((text, n) ->
 			{
-				continue;
-			}
-			try
+				AreaKey key = AreaKey.parse(text);
+				if (key != null && n != null && n > 0)
+				{
+					kills.put(key, n);
+				}
+			});
+		}
+		if (state.hidden != null)
+		{
+			for (HiddenNpc rec : state.hidden)
 			{
-				hidden.put(Integer.parseInt(parts[0]),
-					new HiddenNpc(Integer.parseInt(parts[1]), Integer.parseInt(parts[2])));
-			}
-			catch (NumberFormatException ignored)
-			{
-				// skip malformed entry
+				if (rec != null && rec.name != null)
+				{
+					hidden.computeIfAbsent(rec.world, w -> new HashMap<>()).put(rec.index, rec);
+				}
 			}
 		}
+		dirty = false;
+		setCurrentWorld(currentWorld);
 	}
 }
