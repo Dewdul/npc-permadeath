@@ -50,19 +50,15 @@ is the largest of them:
 
 - A bundled seed of every attackable NPC spawn (`spawns.csv.gz`, from the
   community cache dump at mejrs/data_osrs, regenerated with
-  `python tools/generate_spawns.py`).
+  `python tools/generate_spawns.py`). A weekly job in this repository
+  regenerates the seed and the boss list, and the plugin fetches the latest
+  copies from GitHub once a week, so new content shows up without waiting
+  for a release. The fetched files are cached in `~/.runelite/npc-permadeath`.
 - The OSRS Wiki's location tables, which also supply the place names.
-- Spawn tiles observed by players. When an NPC you saw die reappears with
+- Spawn tiles you observe yourself. When an NPC you saw die reappears with
   the same server index close to you, without you having teleported, the
-  tile it appears on is its spawn point. With *Share spawn data* on, tiles
-  you observe are uploaded to a small community server and everyone else's
-  are downloaded, so the data keeps improving for every user.
-
-The server is a Cloudflare Worker in the `server` directory; see its README
-to deploy one, then enter its URL in the settings (or bake it into
-`NpcPermadeathConfig.DEFAULT_SYNC_URL`). Only NPC names and tile
-coordinates are sent, but the request naturally carries your IP address,
-which is why the setting says so. Sharing is off until a URL is set.
+  tile it appears on is its spawn point. These are saved on your machine
+  and fill any gaps in the other two sources as you play.
 
 ## Settings
 
@@ -84,13 +80,6 @@ which is why the setting says so. Sharing is off until a URL is set.
 | Reveal NPCs attacking you | on | A hidden NPC that attacks you becomes visible so you can fight back, and another of its kind is hidden instead. |
 | Hide loot from hidden NPCs | on | Drops from a hidden NPC (killed by a cannon or area attacks) are invisible and cannot be picked up. Other items on the tile are unaffected. |
 | Announce kills in chat | on | Show the area tally after each kill. |
-
-**Community spawn data**
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Share spawn data | off | Upload spawn tiles you observe and download everyone else's. Sends your IP address to the community server. |
-| Server URL | blank | The community server to share with; blank keeps sharing off. See the `server` directory to run one. |
 
 *Forget all slain NPCs* brings everything back and unticks itself. Chat
 commands: `::permadeath` shows the tallies for the area you are standing in,

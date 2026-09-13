@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.google.inject.Provides;
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -71,11 +72,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 {
 	static final String KEY_STATE = "state";
 	static final String KEY_LEARNED = "learnedSpawns";
-	static final String KEY_PENDING = "pendingSpawns";
 
 	private static final int PRUNE_INTERVAL_TICKS = 100;
 	private static final int SAVE_INTERVAL_TICKS = 200;
-	private static final int UPLOAD_INTERVAL_TICKS = 500;
 	private static final int REGION_CHECK_INTERVAL_TICKS = 10;
 	/** NPCs walking into view appear about 15 tiles out; a respawn is closer. */
 	private static final int LEARN_MAX_DISTANCE = 13;
@@ -129,13 +128,13 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private final List<Decision> pendingDecisions = new ArrayList<>();
 	private final SpawnLearner learner = new SpawnLearner();
 	private SpawnTotals totals;
-	private SpawnSync sync;
+	private DataUpdater updater;
 	private WorldPoint lastPlayerLocation;
 	private PermadeathPanel panel;
 	private NavigationButton navButton;
 	private ChunkMapOverlay mapOverlay;
 	private ChunkPanelOverlay panelOverlay;
-	/** Map chunk the player is standing in, for the panel and community lookups. */
+	/** Map chunk the player is standing in, for the panel. */
 	private int currentRegion = -1;
 
 	private Set<String> bosses = new HashSet<>();
@@ -154,15 +153,15 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Override
 	protected void startUp()
 	{
-		bosses = loadBosses();
+		bosses = loadBosses(getClass().getResourceAsStream("bosses.txt"));
+		updater = new DataUpdater(okHttpClient, configManager, clientThread);
 		nameFilter = parseNames(config.npcNames());
 		ignoredNames = parseNames(config.ignoredNames());
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
-		sync = new SpawnSync(okHttpClient, gson, configManager, clientThread);
 		loadSeedSpawns();
-		learner.load(loadGlobalList(KEY_LEARNED), loadGlobalList(KEY_PENDING));
-		learner.addCommunity(sync.load());
+		learner.load(loadGlobalList(KEY_LEARNED));
+		clientThread.invoke(this::refreshData);
 		panel = new PermadeathPanel(
 			area -> clientThread.invoke(() -> forgetArea(area)),
 			this::openSettings,
@@ -345,7 +344,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 						announce(area);
 					}
 				});
-				fetchCommunity(area.getName());
 			}
 		}
 	}
@@ -517,7 +515,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			&& lastPlayerLocation.getRegionID() != currentRegion)
 		{
 			currentRegion = lastPlayerLocation.getRegionID();
-			fetchCommunityChunk(currentRegion);
 			refreshPanel();
 		}
 		if (tickCounter % PRUNE_INTERVAL_TICKS == 0)
@@ -529,10 +526,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			saveIfDirty();
 			saveLearner();
-		}
-		if (tickCounter % UPLOAD_INTERVAL_TICKS == 0)
-		{
-			shareSpawns();
 		}
 	}
 
@@ -548,7 +541,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			case LOGIN_SCREEN:
 				saveIfDirty();
 				saveLearner();
-				shareSpawns();
 				tracker.clearSession();
 				learner.clearSession();
 				loot.clear();
@@ -638,8 +630,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		int region = here.getRegionID();
 		Map<String, Integer> kills = tracker.killsInRegion(region);
 		message("NPC Permadeath: " + learner.seedCount() + " bundled spawn tiles, " + learner.learnedCount()
-			+ " observed by you, " + learner.communityCount() + " from other players, " + learner.pendingCount()
-			+ " waiting to share.");
+			+ " observed by you.");
 		if (kills.isEmpty())
 		{
 			message("Nothing slain in this area yet. " + tracker.totalKills()
@@ -934,33 +925,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		return Math.max(wiki, known);
 	}
 
-	// ---- community spawn data ------------------------------------------
-
-	private void fetchCommunity(String name)
-	{
-		if (!config.shareSpawns())
-		{
-			return;
-		}
-		sync.fetch(config.syncUrl(), name, now(), tiles ->
-		{
-			learner.addCommunity(tiles);
-			refreshPanel();
-		});
-	}
-
-	private void fetchCommunityChunk(int region)
-	{
-		if (!config.shareSpawns())
-		{
-			return;
-		}
-		sync.fetchChunk(config.syncUrl(), region, now(), tiles ->
-		{
-			learner.addCommunity(tiles);
-			refreshPanel();
-		});
-	}
+	// ---- observed spawn data -------------------------------------------
 
 	private void loadSeedSpawns()
 	{
@@ -972,7 +937,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				return;
 			}
 			learner.loadSeed(in);
-			log.debug("Loaded {} seed spawn tiles", learner.seedCount());
+			log.debug("Loaded {} bundled spawn tiles", learner.seedCount());
 		}
 		catch (IOException e)
 		{
@@ -980,13 +945,42 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 	}
 
-	private void shareSpawns()
+	/**
+	 * Layers the latest data files from the plugin repository over the
+	 * bundled ones: whatever was cached from an earlier fetch first, then a
+	 * fresh copy if the cache is a week old.
+	 */
+	private void refreshData()
 	{
-		if (!config.shareSpawns() || learner.pendingCount() == 0)
+		byte[] spawns = updater.cached("spawns.csv.gz");
+		if (spawns != null)
 		{
-			return;
+			loadExtraSpawns(spawns);
 		}
-		sync.upload(config.syncUrl(), learner.takePendingUpload(), learner::uploadFailed);
+		byte[] bossList = updater.cached("bosses.txt");
+		if (bossList != null)
+		{
+			bosses.addAll(loadBosses(new ByteArrayInputStream(bossList)));
+		}
+		updater.refreshIfStale("spawns.csv.gz", now(), bytes ->
+		{
+			loadExtraSpawns(bytes);
+			refreshPanel();
+		});
+		updater.refreshIfStale("bosses.txt", now(), bytes -> bosses.addAll(loadBosses(new ByteArrayInputStream(bytes))));
+	}
+
+	private void loadExtraSpawns(byte[] gzipped)
+	{
+		try
+		{
+			learner.loadSeed(new ByteArrayInputStream(gzipped));
+			log.debug("Spawn tiles known after update: {}", learner.seedCount());
+		}
+		catch (IOException e)
+		{
+			log.debug("Ignoring unreadable spawn data update", e);
+		}
 	}
 
 	private void saveLearner()
@@ -996,7 +990,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			return;
 		}
 		saveGlobalList(KEY_LEARNED, learner.serializeLearned());
-		saveGlobalList(KEY_PENDING, learner.serializePending());
 		learner.markSaved();
 	}
 
@@ -1059,14 +1052,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		loaded = true;
 		log.debug("Loaded {} kills", tracker.totalKills());
 		rebalanceKills();
-		Set<Integer> regions = new HashSet<>();
 		for (AreaKey area : tracker.killsByArea().keySet())
 		{
 			totals.ensure(area.getName(), now(), this::rebalanceKills);
-			fetchCommunity(area.getName());
-			regions.add(area.getRegion());
 		}
-		regions.forEach(this::fetchCommunityChunk);
 		refreshPanel();
 		// NPCs already in view spawned before the state was known.
 		for (NPC npc : client.getTopLevelWorldView().npcs())
@@ -1172,10 +1161,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.collect(Collectors.toList());
 	}
 
-	private static Set<String> loadBosses()
+	private static Set<String> loadBosses(InputStream source)
 	{
 		Set<String> names = new HashSet<>();
-		try (InputStream in = NpcPermadeathPlugin.class.getResourceAsStream("bosses.txt"))
+		try (InputStream in = source)
 		{
 			if (in == null)
 			{

@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
 import java.util.zip.GZIPOutputStream;
 import org.junit.Test;
 
@@ -46,7 +45,6 @@ public class SpawnLearnerTest
 		assertEquals(Collections.singleton("Goblin"), learner.namesInRegion(LUMBRIDGE));
 		assertTrue(learner.hasSpawns(LUMBRIDGE));
 		assertFalse(learner.hasSpawns(LUMBRIDGE + 1));
-		assertEquals(1, learner.pendingCount());
 		assertTrue(learner.isDirty());
 	}
 
@@ -87,12 +85,11 @@ public class SpawnLearnerTest
 	}
 
 	@Test
-	public void seedCommunityAndLearnedTilesAreCountedOnce() throws IOException
+	public void seedAndLearnedTilesAreCountedOnce() throws IOException
 	{
 		learner.loadSeed(new ByteArrayInputStream(gzip(
 			"# header\nGoblin|3029|3245|3245|0\nGoblin|3029|3250|3230|0\nRat|2854|3210|3210|0\nbad line\n")));
 		assertEquals(3, learner.seedCount());
-		learner.addCommunity(Collections.singletonList(new SpawnTile("Goblin", GOBLIN, 3245, 3245, 0)));
 		learner.noteDeath(7, GOBLIN, "Goblin", 100);
 		learner.noteSpawn(7, GOBLIN, "Goblin", 3250, 3230, 0, 130, true);
 		learner.noteDeath(8, GOBLIN, "Goblin", 100);
@@ -102,13 +99,7 @@ public class SpawnLearnerTest
 		assertEquals(1, learner.countInRegion("Rat", LUMBRIDGE));
 		assertEquals(0, learner.countInRegion("Cow", LUMBRIDGE));
 		assertEquals(Arrays.asList("Goblin", "Rat"), new java.util.ArrayList<>(learner.namesInRegion(LUMBRIDGE)));
-		// Only the tile nobody knew about is worth sharing.
-		List<SpawnTile> upload = learner.takePendingUpload();
-		assertEquals(1, upload.size());
-		assertEquals(3260, upload.get(0).getX());
-		assertEquals(0, learner.pendingCount());
-		learner.uploadFailed(upload);
-		assertEquals(1, learner.pendingCount());
+		assertEquals(2, learner.learnedCount());
 	}
 
 	@Test
@@ -118,16 +109,15 @@ public class SpawnLearnerTest
 		learner.noteSpawn(7, GOBLIN, "Goblin", 3245, 3245, 0, 130, true);
 
 		SpawnLearner fresh = new SpawnLearner();
-		fresh.load(learner.serializeLearned(), learner.serializePending());
+		fresh.load(learner.serializeLearned());
 
 		assertEquals(1, fresh.learnedCount());
-		assertEquals(1, fresh.pendingCount());
 		assertEquals(1, fresh.countInRegion("Goblin", LUMBRIDGE));
 		assertEquals("Goblin|3029|3245|3245|0", learner.serializeLearned().get(0));
 		assertNull(SpawnTile.parse("garbage"));
 		assertNull(SpawnTile.parse("|1|2|3|4"));
 		assertNull(SpawnTile.parse("Goblin|a|b|c|d"));
-		fresh.load(Arrays.asList("bad", "Rat|2854|3200|3200|0"), Collections.emptyList());
+		fresh.load(Arrays.asList("bad", "Rat|2854|3200|3200|0"));
 		assertEquals(1, fresh.learnedCount());
 	}
 

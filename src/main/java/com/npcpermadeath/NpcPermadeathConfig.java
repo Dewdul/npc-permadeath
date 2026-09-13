@@ -10,13 +10,6 @@ public interface NpcPermadeathConfig extends Config
 {
 	String GROUP = "npcpermadeath";
 	String KEY_FORGET_ALL = "forgetAll";
-	/**
-	 * Community spawn server; see the server directory for how to deploy one.
-	 * Empty until one is running, which disables sharing regardless of the
-	 * toggle.
-	 */
-	String DEFAULT_SYNC_URL = "";
-
 	@ConfigSection(
 		name = "Which NPCs count",
 		description = "Choose which NPCs can be killed for good.",
@@ -137,38 +130,6 @@ public interface NpcPermadeathConfig extends Config
 	default boolean announceKills()
 	{
 		return true;
-	}
-
-	@ConfigSection(
-		name = "Community spawn data",
-		description = "Pool observed spawn points with other players to fill gaps in the wiki.",
-		position = 25
-	)
-	String communitySection = "community";
-
-	@ConfigItem(
-		keyName = "shareSpawns",
-		name = "Share spawn data",
-		description = "Upload the spawn tiles you see NPCs respawn on and download everyone else's, so totals exist even where the wiki has none. "
-			+ "Needs a server URL below. This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers.",
-		section = communitySection,
-		position = 26
-	)
-	default boolean shareSpawns()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "syncUrl",
-		name = "Server URL",
-		description = "The community spawn server to share with. Blank means sharing is off. See the server directory of the plugin repository to run one.",
-		section = communitySection,
-		position = 27
-	)
-	default String syncUrl()
-	{
-		return DEFAULT_SYNC_URL;
 	}
 
 	@ConfigItem(

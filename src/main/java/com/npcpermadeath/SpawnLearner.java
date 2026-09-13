@@ -19,8 +19,7 @@ import lombok.Value;
 
 /**
  * Everything known about where NPCs spawn, indexed by map chunk: a bundled
- * seed (the community spawn dump), tiles this client observed itself, and
- * tiles other players shared.
+ * seed (the community spawn dump) plus tiles this client observed itself.
  *
  * <p>Observing works by watching NPCs respawn: when an NPC we saw die
  * reappears with the same index close to the player, without the player
@@ -81,9 +80,6 @@ class SpawnLearner
 	private final Map<Integer, Dead> awaitingRespawn = new HashMap<>();
 	/** Tiles this client observed itself. */
 	private final Set<SpawnTile> learned = new HashSet<>();
-	/** Tiles reported by other players. */
-	private final Set<SpawnTile> community = new HashSet<>();
-	private final Set<SpawnTile> pendingUpload = new HashSet<>();
 	/** region -> NPC name -> every known spawn tile, from all sources. */
 	private final Map<Integer, Map<String, Set<SpawnTile>>> index = new HashMap<>();
 	private int seedCount;
@@ -139,16 +135,12 @@ class SpawnLearner
 		{
 			return null;
 		}
-		boolean isNew = addToIndex(tile);
-		if (isNew && !community.contains(tile))
-		{
-			pendingUpload.add(tile);
-		}
+		addToIndex(tile);
 		dirty = true;
 		return tile;
 	}
 
-	/** Distinct known spawn tiles of the NPC in the chunk, from every source. */
+	/** Distinct known spawn tiles of the NPC in the chunk, seed and observed. */
 	int countInRegion(String name, int region)
 	{
 		Map<String, Set<SpawnTile>> byName = index.get(region);
@@ -172,30 +164,6 @@ class SpawnLearner
 		return index.containsKey(region);
 	}
 
-	void addCommunity(Collection<SpawnTile> tiles)
-	{
-		for (SpawnTile tile : tiles)
-		{
-			community.add(tile);
-			addToIndex(tile);
-		}
-		pendingUpload.removeAll(tiles);
-	}
-
-	/** Hands over everything not yet shared; call {@link #uploadFailed} to put them back. */
-	List<SpawnTile> takePendingUpload()
-	{
-		List<SpawnTile> out = new ArrayList<>(pendingUpload);
-		pendingUpload.clear();
-		dirty = true;
-		return out;
-	}
-
-	void uploadFailed(Collection<SpawnTile> tiles)
-	{
-		pendingUpload.addAll(tiles);
-	}
-
 	void prune(int tick)
 	{
 		awaitingRespawn.values().removeIf(d -> tick - d.getTick() > RESPAWN_TTL_TICKS);
@@ -216,16 +184,6 @@ class SpawnLearner
 		return learned.size();
 	}
 
-	int communityCount()
-	{
-		return community.size();
-	}
-
-	int pendingCount()
-	{
-		return pendingUpload.size();
-	}
-
 	boolean isDirty()
 	{
 		return dirty;
@@ -244,32 +202,15 @@ class SpawnLearner
 		return out;
 	}
 
-	List<String> serializePending()
-	{
-		List<String> out = new ArrayList<>();
-		pendingUpload.forEach(t -> out.add(t.serialize()));
-		Collections.sort(out);
-		return out;
-	}
-
-	void load(Collection<String> learnedEntries, Collection<String> pendingEntries)
+	void load(Collection<String> learnedEntries)
 	{
 		learned.clear();
-		pendingUpload.clear();
 		for (String e : learnedEntries)
 		{
 			SpawnTile t = SpawnTile.parse(e);
 			if (t != null && learned.add(t))
 			{
 				addToIndex(t);
-			}
-		}
-		for (String e : pendingEntries)
-		{
-			SpawnTile t = SpawnTile.parse(e);
-			if (t != null)
-			{
-				pendingUpload.add(t);
 			}
 		}
 		dirty = false;
