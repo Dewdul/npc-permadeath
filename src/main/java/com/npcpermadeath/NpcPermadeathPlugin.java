@@ -178,8 +178,16 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), npc.getIndex());
 			saveState();
+			boolean totalKnown = totals.get(area.getName(), area.getRegion()) != null;
 			announce(area);
-			totals.ensure(area.getName(), now(), () -> announce(area));
+			// If the total was missing, say the line again once the lookup fills it in.
+			totals.ensure(area.getName(), now(), () ->
+			{
+				if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
+				{
+					announce(area);
+				}
+			});
 		}
 	}
 
