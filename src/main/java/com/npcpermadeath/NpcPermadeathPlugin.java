@@ -21,7 +21,8 @@ import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.client.callback.ClientThread;
-import net.runelite.client.callback.Hooks;
+import net.runelite.client.callback.RenderCallback;
+import net.runelite.client.callback.RenderCallbackManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -37,7 +38,7 @@ import net.runelite.client.util.WildcardMatcher;
 	description = "NPCs you kill stay dead: once you have slain an NPC it is hidden when it respawns, so areas slowly empty out",
 	tags = {"npc", "hide", "kill", "respawn", "permadeath", "entity", "hider", "immersion"}
 )
-public class NpcPermadeathPlugin extends Plugin
+public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 {
 	static final String KEY_CULLED_SPAWNS = "culledSpawns";
 
@@ -53,7 +54,7 @@ public class NpcPermadeathPlugin extends Plugin
 	private ClientThread clientThread;
 
 	@Inject
-	private Hooks hooks;
+	private RenderCallbackManager renderCallbackManager;
 
 	@Inject
 	private ConfigManager configManager;
@@ -62,7 +63,6 @@ public class NpcPermadeathPlugin extends Plugin
 	private NpcPermadeathConfig config;
 
 	private final PermadeathTracker tracker = new PermadeathTracker();
-	private final Hooks.RenderableDrawListener drawListener = this::shouldDraw;
 
 	private List<String> nameFilter = new ArrayList<>();
 	private int currentWorld = -1;
@@ -78,7 +78,7 @@ public class NpcPermadeathPlugin extends Plugin
 	protected void startUp()
 	{
 		nameFilter = parseNames(config.npcNames());
-		hooks.registerRenderableDrawListener(drawListener);
+		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
 			if (client.getGameState() == GameState.LOGGED_IN)
@@ -92,13 +92,15 @@ public class NpcPermadeathPlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
-		hooks.unregisterRenderableDrawListener(drawListener);
+		renderCallbackManager.unregister(this);
 		tracker.clearAll();
 		currentWorld = -1;
 		lastPlayerLocation = null;
 	}
 
-	boolean shouldDraw(Renderable renderable, boolean drawingUI)
+	/** Called by the client for every entity about to be drawn; false skips it. */
+	@Override
+	public boolean addEntity(Renderable renderable, boolean drawingUI)
 	{
 		if (renderable instanceof NPC)
 		{
