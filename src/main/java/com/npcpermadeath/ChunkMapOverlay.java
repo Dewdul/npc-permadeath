@@ -16,10 +16,6 @@ import net.runelite.api.worldmap.WorldMap;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.client.ui.overlay.components.ComponentConstants;
-import net.runelite.client.ui.overlay.components.LineComponent;
-import net.runelite.client.ui.overlay.components.PanelComponent;
-import net.runelite.client.ui.overlay.components.TitleComponent;
 
 /**
  * Outlines map chunks on the world map: green where nothing has been
@@ -72,20 +68,19 @@ class ChunkMapOverlay extends Overlay
 
 	/** Beyond this many chunks in view, only chunks with kills are drawn. */
 	private static final int MAX_FULL_GRID = 2500;
-	private static final int MAX_PANEL_LINES = 30;
-	private static final int PANEL_GAP = 8;
-	private static final Color UNTOUCHED = new Color(170, 170, 170);
 
 	private final Client client;
 	private final ChunkSource source;
-	private final PanelComponent panel = new PanelComponent();
+	/** Chunk under the mouse this frame, or -1; read by {@link ChunkPanelOverlay}. */
+	private int hoveredRegion = -1;
+	private Rectangle hoveredRect;
+	private Rectangle mapBounds;
 
 	ChunkMapOverlay(NpcPermadeathPlugin plugin, Client client, ChunkSource source)
 	{
 		super(plugin);
 		this.client = client;
 		this.source = source;
-		panel.setBackgroundColor(ComponentConstants.STANDARD_BACKGROUND_COLOR);
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.MANUAL);
 		drawAfterInterface(InterfaceID.Worldmap.MAP_CONTAINER >>> 16);
@@ -94,6 +89,7 @@ class ChunkMapOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D g)
 	{
+		hoveredRegion = -1;
 		Widget map = client.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
 		if (map == null || map.isHidden())
 		{
@@ -107,6 +103,7 @@ class ChunkMapOverlay extends Overlay
 		{
 			return null;
 		}
+		mapBounds = bounds;
 		// The map widget's centre shows the world tile the map is positioned on.
 		double originX = bounds.getCenterX() - centre.getX() * pxPerTile;
 		double originY = bounds.getCenterY() + centre.getY() * pxPerTile;
@@ -163,52 +160,30 @@ class ChunkMapOverlay extends Overlay
 			g.setColor(Color.WHITE);
 			g.setStroke(new BasicStroke(2f));
 			g.draw(hoveredRect);
-			drawPanel(g, bounds, hoveredRect, hovered);
+			this.hoveredRegion = hovered;
+			this.hoveredRect = hoveredRect;
 		}
 		g.setClip(oldClip);
 		return null;
 	}
 
-	/** Pins the chunk's list to the right of the chunk, or the left if there is no room. */
-	private void drawPanel(Graphics2D g, Rectangle bounds, Rectangle chunk, int region)
+	int getHoveredRegion()
 	{
-		panel.getChildren().clear();
-		panel.getChildren().add(TitleComponent.builder().text(source.heading(region)).color(Color.WHITE).build());
-		List<Entry> entries = source.entries(region);
-		int shown = Math.min(entries.size(), MAX_PANEL_LINES);
-		for (int i = 0; i < shown; i++)
-		{
-			Entry e = entries.get(i);
-			String count = e.getTotal() == null ? Integer.toString(e.getKills()) : e.getKills() + " / " + e.getTotal();
-			Color color = e.getKills() == 0 ? UNTOUCHED
-				: e.getTotal() != null && e.getKills() >= e.getTotal() ? State.ALL.color : State.SOME.color;
-			panel.getChildren().add(LineComponent.builder()
-				.left(e.getName()).leftColor(e.getKills() == 0 ? UNTOUCHED : Color.WHITE)
-				.right(count).rightColor(color)
-				.build());
-		}
-		if (entries.size() > shown)
-		{
-			panel.getChildren().add(LineComponent.builder().left("+" + (entries.size() - shown) + " more").build());
-		}
+		return hoveredRegion;
+	}
 
-		// Measure first with an empty clip, then place and draw for real.
-		Shape clip = g.getClip();
-		g.setClip(new Rectangle(0, 0, 0, 0));
-		panel.setPreferredLocation(new java.awt.Point(0, 0));
-		Dimension size = panel.render(g);
-		g.setClip(clip);
-		if (size == null)
-		{
-			return;
-		}
-		int x = chunk.x + chunk.width + PANEL_GAP;
-		if (x + size.width > bounds.x + bounds.width)
-		{
-			x = chunk.x - PANEL_GAP - size.width;
-		}
-		int y = Math.max(bounds.y, Math.min(chunk.y, bounds.y + bounds.height - size.height));
-		panel.setPreferredLocation(new java.awt.Point(x, y));
-		panel.render(g);
+	Rectangle getHoveredRect()
+	{
+		return hoveredRect;
+	}
+
+	Rectangle getMapBounds()
+	{
+		return mapBounds;
+	}
+
+	ChunkSource getSource()
+	{
+		return source;
 	}
 }

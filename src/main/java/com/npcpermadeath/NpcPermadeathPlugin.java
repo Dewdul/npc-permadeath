@@ -134,6 +134,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private PermadeathPanel panel;
 	private NavigationButton navButton;
 	private ChunkMapOverlay mapOverlay;
+	private ChunkPanelOverlay panelOverlay;
 	/** Map chunk the player is standing in, for the panel and community lookups. */
 	private int currentRegion = -1;
 
@@ -174,7 +175,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.build();
 		clientToolbar.addNavigation(navButton);
 		mapOverlay = new ChunkMapOverlay(this, client, chunkSource);
+		panelOverlay = new ChunkPanelOverlay(this, mapOverlay);
 		overlayManager.add(mapOverlay);
+		overlayManager.add(panelOverlay);
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
@@ -191,7 +194,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		renderCallbackManager.unregister(this);
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(mapOverlay);
+		overlayManager.remove(panelOverlay);
 		mapOverlay = null;
+		panelOverlay = null;
 		currentRegion = -1;
 		navButton = null;
 		panel = null;
