@@ -160,39 +160,6 @@ class SpawnTotals
 		regionLabels.putAll(fresh.labelByRegion);
 	}
 
-	/**
-	 * When a kill lands in a region the wiki has no spawns of this NPC in, the
-	 * NPC most likely wandered over from next door. Returns the neighbouring
-	 * region with the most spawns, or the region itself when nothing better
-	 * is known.
-	 */
-	int homeRegion(String name, int region)
-	{
-		Cached cached = cache.get(name);
-		if (cached == null || cached.byRegion.isEmpty() || cached.byRegion.containsKey(region))
-		{
-			return region;
-		}
-		int rx = region >> 8;
-		int ry = region & 0xff;
-		int best = region;
-		int bestPins = 0;
-		for (int dx = -1; dx <= 1; dx++)
-		{
-			for (int dy = -1; dy <= 1; dy++)
-			{
-				int candidate = ((rx + dx) << 8) | (ry + dy);
-				Integer pins = cached.byRegion.get(candidate);
-				if (pins != null && pins > bestPins)
-				{
-					best = candidate;
-					bestPins = pins;
-				}
-			}
-		}
-		return best;
-	}
-
 	/** Fetches the NPC's page if missing or stale; runs the callback on the client thread when done. */
 	void ensure(String name, long now, Runnable onLoaded)
 	{

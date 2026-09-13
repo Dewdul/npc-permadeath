@@ -293,6 +293,28 @@ public class PermadeathTrackerTest
 	}
 
 	@Test
+	public void movingSomeKillsTakesThatManyHiddenRecordsAlong()
+	{
+		kill(7);
+		kill(8);
+		kill(9);
+		tracker.markSaved();
+		AreaKey west = new AreaKey(NAME, LUMBRIDGE - 1);
+
+		assertEquals(2, tracker.moveKills(AREA, LUMBRIDGE - 1, 2));
+
+		assertEquals(1, tracker.kills(AREA));
+		assertEquals(2, tracker.kills(west));
+		assertEquals(1, tracker.hiddenHere(AREA));
+		assertEquals(2, tracker.hiddenHere(west));
+		assertTrue(tracker.isHidden(7, GOBLIN) && tracker.isHidden(8, GOBLIN) && tracker.isHidden(9, GOBLIN));
+		assertTrue(tracker.isDirty());
+		assertEquals(0, tracker.moveKills(AREA, LUMBRIDGE, 1));
+		assertEquals(1, tracker.moveKills(AREA, LUMBRIDGE - 1, 5));
+		assertEquals(0, tracker.kills(AREA));
+	}
+
+	@Test
 	public void forgettingAnAreaBringsItsNpcsBackEverywhere()
 	{
 		kill(7);

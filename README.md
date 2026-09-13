@@ -28,24 +28,35 @@ spawns in (an NPC that wandered over a border) is credited to the
 neighbouring chunk that has them. This is display only; the hiding works
 without it.
 
-The sidebar panel (tombstone icon) lists everything slain, one heading per
-chunk such as `Lumbridge (3200, 3200)`, with an `x` on each row to forget
-those kills and bring the NPCs back, and a Settings button. Click a heading
-to centre the world map on that chunk. On the world map every chunk with
-kills is tinted, outlined and, once zoomed in enough, labelled with its
-tallies; a tombstone marker in the centre of each chunk carries the same
-details as a tooltip.
+The sidebar panel (tombstone icon) lists the chunk you are standing in and
+every chunk you have kills in, headed like `Lumbridge (3200, 3200)`. Each
+chunk lists every attackable NPC type known to spawn there, `0 / 12` until
+you start on them, with an `x` on rows with kills to forget those kills and
+bring the NPCs back. Click a heading to centre the world map on that chunk;
+the Settings button opens the plugin settings.
 
-### Community spawn data
+On the world map every chunk with known NPCs is outlined: green if nothing
+there has been killed, orange if something has, red if every NPC type in it
+is gone. Hover a chunk for the full list with kills and totals.
 
-The wiki is missing coordinates for some NPCs (rats, for one). The plugin
-learns spawn tiles itself: when an NPC you saw die reappears with the same
-server index close to you, without you having teleported, the tile it
-appears on is its spawn point. With *Share spawn data* on, learned tiles
-are uploaded to a small community server and everyone else's are
-downloaded, so totals fill in over time for every user. A chunk's total is
-the larger of the wiki's count and the number of spawn tiles players have
-observed.
+Kills are credited to the chunk the NPC spawns in. One killed in a chunk it
+does not spawn in, or in a chunk whose spawns are all already dead, wandered
+in from next door, so it counts against the neighbouring chunk instead.
+
+### Spawn data
+
+Three sources feed the per-chunk NPC lists and totals, and a chunk's total
+is the largest of them:
+
+- A bundled seed of every attackable NPC spawn (`spawns.csv.gz`, from the
+  community cache dump at mejrs/data_osrs, regenerated with
+  `python tools/generate_spawns.py`).
+- The OSRS Wiki's location tables, which also supply the place names.
+- Spawn tiles observed by players. When an NPC you saw die reappears with
+  the same server index close to you, without you having teleported, the
+  tile it appears on is its spawn point. With *Share spawn data* on, tiles
+  you observe are uploaded to a small community server and everyone else's
+  are downloaded, so the data keeps improving for every user.
 
 The server is a Cloudflare Worker in the `server` directory; see its README
 to deploy one, then put its URL in `NpcPermadeathConfig.DEFAULT_SYNC_URL`.

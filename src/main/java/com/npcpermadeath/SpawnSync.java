@@ -143,12 +143,32 @@ class SpawnSync
 	void fetch(String baseUrl, String name, long now, Consumer<List<SpawnTile>> onLoaded)
 	{
 		HttpUrl base = base(baseUrl);
-		Cached cached = cache.get(name);
-		if (base == null || (cached != null && now - cached.fetched < TTL_MS) || !inFlight.add(name))
+		if (base == null)
 		{
 			return;
 		}
-		HttpUrl url = base.newBuilder().addPathSegment("npc").addPathSegment(name).build();
+		fetch(base.newBuilder().addPathSegment("npc").addPathSegment(name).build(), name, now, onLoaded);
+	}
+
+	/** Downloads every tile other players reported in one map chunk, if missing or stale. */
+	void fetchChunk(String baseUrl, int region, long now, Consumer<List<SpawnTile>> onLoaded)
+	{
+		HttpUrl base = base(baseUrl);
+		if (base == null)
+		{
+			return;
+		}
+		fetch(base.newBuilder().addPathSegment("chunk").addPathSegment(Integer.toString(region)).build(),
+			"chunk:" + region, now, onLoaded);
+	}
+
+	private void fetch(HttpUrl url, String name, long now, Consumer<List<SpawnTile>> onLoaded)
+	{
+		Cached cached = cache.get(name);
+		if ((cached != null && now - cached.fetched < TTL_MS) || !inFlight.add(name))
+		{
+			return;
+		}
 		httpClient.newCall(new Request.Builder().url(url).build()).enqueue(new Callback()
 		{
 			@Override

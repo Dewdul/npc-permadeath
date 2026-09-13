@@ -1,5 +1,10 @@
 package com.npcpermadeath;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -8,13 +13,18 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.zip.GZIPInputStream;
 import lombok.Value;
 
 /**
- * Learns real spawn tiles by watching NPCs respawn. When an NPC we saw die
+ * Everything known about where NPCs spawn, indexed by map chunk: a bundled
+ * seed (the community spawn dump), tiles this client observed itself, and
+ * tiles other players shared.
+ *
+ * <p>Observing works by watching NPCs respawn: when an NPC we saw die
  * reappears with the same index close to the player, without the player
- * having teleported, the tile it appears on is its spawn point. These tiles
- * fill the gaps in the wiki's data and can be shared with other players.
+ * having teleported, the tile it appears on is its spawn point.
  */
 class SpawnLearner
 {
@@ -74,7 +84,39 @@ class SpawnLearner
 	/** Tiles reported by other players. */
 	private final Set<SpawnTile> community = new HashSet<>();
 	private final Set<SpawnTile> pendingUpload = new HashSet<>();
+	/** region -> NPC name -> every known spawn tile, from all sources. */
+	private final Map<Integer, Map<String, Set<SpawnTile>>> index = new HashMap<>();
+	private int seedCount;
 	private boolean dirty;
+
+	/** Loads the bundled seed: gzipped lines of name|id|x|y|plane. */
+	void loadSeed(InputStream gzipped) throws IOException
+	{
+		try (BufferedReader reader = new BufferedReader(
+			new InputStreamReader(new GZIPInputStream(gzipped), StandardCharsets.UTF_8)))
+		{
+			String line;
+			while ((line = reader.readLine()) != null)
+			{
+				if (line.isEmpty() || line.startsWith("#"))
+				{
+					continue;
+				}
+				SpawnTile tile = SpawnTile.parse(line);
+				if (tile != null && addToIndex(tile))
+				{
+					seedCount++;
+				}
+			}
+		}
+	}
+
+	private boolean addToIndex(SpawnTile tile)
+	{
+		return index.computeIfAbsent(tile.region(), r -> new HashMap<>())
+			.computeIfAbsent(tile.getName(), n -> new HashSet<>())
+			.add(tile);
+	}
 
 	void noteDeath(int index, int npcId, String name, int tick)
 	{
@@ -97,7 +139,8 @@ class SpawnLearner
 		{
 			return null;
 		}
-		if (!community.contains(tile))
+		boolean isNew = addToIndex(tile);
+		if (isNew && !community.contains(tile))
 		{
 			pendingUpload.add(tile);
 		}
@@ -105,30 +148,37 @@ class SpawnLearner
 		return tile;
 	}
 
-	/** Distinct known spawn tiles of the NPC in the region, from both this client and other players. */
+	/** Distinct known spawn tiles of the NPC in the chunk, from every source. */
 	int countInRegion(String name, int region)
 	{
-		Set<SpawnTile> tiles = new HashSet<>();
-		for (SpawnTile t : learned)
+		Map<String, Set<SpawnTile>> byName = index.get(region);
+		if (byName == null)
 		{
-			if (t.getName().equals(name) && t.region() == region)
-			{
-				tiles.add(t);
-			}
+			return 0;
 		}
-		for (SpawnTile t : community)
-		{
-			if (t.getName().equals(name) && t.region() == region)
-			{
-				tiles.add(t);
-			}
-		}
-		return tiles.size();
+		Set<SpawnTile> tiles = byName.get(name);
+		return tiles == null ? 0 : tiles.size();
+	}
+
+	/** Every NPC type known to spawn in the chunk, sorted. */
+	Set<String> namesInRegion(int region)
+	{
+		Map<String, Set<SpawnTile>> byName = index.get(region);
+		return byName == null ? Collections.emptySet() : new TreeSet<>(byName.keySet());
+	}
+
+	boolean hasSpawns(int region)
+	{
+		return index.containsKey(region);
 	}
 
 	void addCommunity(Collection<SpawnTile> tiles)
 	{
-		community.addAll(tiles);
+		for (SpawnTile tile : tiles)
+		{
+			community.add(tile);
+			addToIndex(tile);
+		}
 		pendingUpload.removeAll(tiles);
 	}
 
@@ -154,6 +204,11 @@ class SpawnLearner
 	void clearSession()
 	{
 		awaitingRespawn.clear();
+	}
+
+	int seedCount()
+	{
+		return seedCount;
 	}
 
 	int learnedCount()
@@ -204,9 +259,9 @@ class SpawnLearner
 		for (String e : learnedEntries)
 		{
 			SpawnTile t = SpawnTile.parse(e);
-			if (t != null)
+			if (t != null && learned.add(t))
 			{
-				learned.add(t);
+				addToIndex(t);
 			}
 		}
 		for (String e : pendingEntries)

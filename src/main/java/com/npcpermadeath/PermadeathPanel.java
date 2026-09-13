@@ -89,7 +89,7 @@ class PermadeathPanel extends PluginPanel
 	{
 		list.removeAll();
 		int totalKills = rows.stream().mapToInt(Row::getKills).sum();
-		long chunks = rows.stream().map(r -> r.getArea().getRegion()).distinct().count();
+		long chunks = rows.stream().filter(r -> r.getKills() > 0).map(r -> r.getArea().getRegion()).distinct().count();
 		if (rows.isEmpty())
 		{
 			summary.setText("Nothing slain yet.");
@@ -180,9 +180,11 @@ class PermadeathPanel extends PluginPanel
 			: row.getKills() + " / " + row.getTotal();
 		JLabel count = new JLabel(tally, SwingConstants.RIGHT);
 		count.setFont(FontManager.getRunescapeSmallFont());
-		count.setForeground(row.getTotal() != null && row.getKills() >= row.getTotal()
-			? ColorScheme.PROGRESS_ERROR_COLOR
-			: ColorScheme.BRAND_ORANGE);
+		count.setForeground(row.getKills() == 0
+			? ColorScheme.LIGHT_GRAY_COLOR
+			: row.getTotal() != null && row.getKills() >= row.getTotal()
+				? ColorScheme.PROGRESS_ERROR_COLOR
+				: ColorScheme.BRAND_ORANGE);
 		count.setToolTipText(row.getHiddenHere() + " hidden on this world"
 			+ (row.getTotal() == null ? ", no spawn data yet" : ", " + row.getTotal() + " spawns known in this chunk"));
 		c.gridx = 1;
@@ -190,15 +192,18 @@ class PermadeathPanel extends PluginPanel
 		c.fill = GridBagConstraints.NONE;
 		panel.add(count, c);
 
-		JButton forget = new JButton("x");
-		forget.setFont(FontManager.getRunescapeSmallFont());
-		forget.setToolTipText("Forget these kills and bring them back");
-		forget.setMargin(new Insets(0, 4, 0, 4));
-		forget.setFocusPainted(false);
-		forget.addActionListener(e -> onForget.accept(row.getArea()));
-		c.gridx = 2;
-		c.insets = new Insets(0, 0, 0, 0);
-		panel.add(forget, c);
+		if (row.getKills() > 0)
+		{
+			JButton forget = new JButton("x");
+			forget.setFont(FontManager.getRunescapeSmallFont());
+			forget.setToolTipText("Forget these kills and bring them back");
+			forget.setMargin(new Insets(0, 4, 0, 4));
+			forget.setFocusPainted(false);
+			forget.addActionListener(e -> onForget.accept(row.getArea()));
+			c.gridx = 2;
+			c.insets = new Insets(0, 0, 0, 0);
+			panel.add(forget, c);
+		}
 
 		JPanel wrapper = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 1));
 		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);

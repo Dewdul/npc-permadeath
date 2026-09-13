@@ -347,6 +347,52 @@ class PermadeathTracker
 		dirty = true;
 	}
 
+	/**
+	 * Moves some of an area's kills, and as many of its hidden records, into
+	 * another region of the same NPC. Used when a chunk has more kills than
+	 * spawns: the extra NPCs must have wandered in from next door.
+	 *
+	 * @return how many kills were moved
+	 */
+	int moveKills(AreaKey from, int toRegion, int count)
+	{
+		int available = kills(from);
+		int n = Math.min(count, available);
+		if (n <= 0 || from.getRegion() == toRegion)
+		{
+			return 0;
+		}
+		AreaKey to = new AreaKey(from.getName(), toRegion);
+		if (n == available)
+		{
+			kills.remove(from);
+		}
+		else
+		{
+			kills.put(from, available - n);
+		}
+		kills.merge(to, n, Integer::sum);
+		for (Map<Integer, HiddenNpc> world : hidden.values())
+		{
+			int moved = 0;
+			for (HiddenNpc rec : world.values())
+			{
+				if (moved >= n)
+				{
+					break;
+				}
+				if (rec.area().equals(from))
+				{
+					rec.region = toRegion;
+					moved++;
+				}
+			}
+		}
+		setCurrentWorld(currentWorld);
+		dirty = true;
+		return n;
+	}
+
 	/** Drops the kill count for one NPC in one area and brings its hidden NPCs back on every world. */
 	void forgetArea(AreaKey key)
 	{

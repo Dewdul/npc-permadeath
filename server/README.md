@@ -19,6 +19,7 @@ wiki has no data. Runs comfortably inside the Cloudflare free tier.
 | Method | Path | Body / result |
 | --- | --- | --- |
 | GET | `/npc/<name>` | `{ "name": "Goblin", "tiles": [{ "name", "id", "x", "y", "plane", "reports" }] }` |
+| GET | `/chunk/<region>` | Same shape for every NPC in one 64x64 map chunk; `region = (x >> 6) << 8 \| (y >> 6)`. |
 | POST | `/report` | `{ "tiles": [{ "name", "id", "x", "y", "plane" }] }`, at most 200 per call, returns `{ "accepted": n }` |
 
 Tiles are keyed by NPC name and position. Repeat reports increment

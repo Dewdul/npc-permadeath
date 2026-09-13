@@ -65,15 +65,9 @@ public class SpawnTotalsTest
 			+ "{{LocLine|location = [[Goblin Village]]|x:2957,y:3510}}";
 		totals.put("Goblin", SpawnTotals.parse(page), 0);
 		int west = ((3190 >> 6) << 8) | (3280 >> 6);
-		int east = ((3264 >> 6) << 8) | (3264 >> 6);
 
 		assertEquals("Lumbridge", totals.label("Goblin", LUMBRIDGE));
 		assertEquals("Lumbridge", totals.label("Goblin", west));
-		// A kill just over the border, where the wiki has no goblins, belongs to Lumbridge.
-		assertEquals(LUMBRIDGE, totals.homeRegion("Goblin", east));
-		assertEquals(LUMBRIDGE, totals.homeRegion("Goblin", LUMBRIDGE));
-		// Unknown NPC: nothing to go on.
-		assertEquals(east, totals.homeRegion("Rat", east));
 		// Pooled labels name a region for NPCs whose own page has none.
 		assertEquals("Lumbridge", totals.label("Rat", LUMBRIDGE));
 		assertNull(totals.label("Rat", 1));

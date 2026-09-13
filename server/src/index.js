@@ -1,7 +1,8 @@
 // Community spawn database for the NPC Permadeath RuneLite plugin.
 //
-//   GET  /npc/<name>   -> { name, tiles: [{ name, id, x, y, plane, reports }] }
-//   POST /report       <- { tiles: [{ name, id, x, y, plane }] }   (max 200)
+//   GET  /npc/<name>     -> { name, tiles: [{ name, id, x, y, plane, reports }] }
+//   GET  /chunk/<region> -> { region, tiles: [...] }  (region = (x>>6)<<8 | y>>6)
+//   POST /report         <- { tiles: [{ name, id, x, y, plane }] }   (max 200)
 //
 // Every tile is a spawn point a player saw an NPC respawn on. Tiles are keyed
 // by NPC name and position; repeat reports bump a counter so one-off mistakes
@@ -19,6 +20,9 @@ export default {
 
     if (request.method === "GET" && parts[0] === "npc" && parts.length === 2) {
       return getNpc(env, decodeURIComponent(parts[1]));
+    }
+    if (request.method === "GET" && parts[0] === "chunk" && parts.length === 2) {
+      return getChunk(env, parts[1]);
     }
     if (request.method === "POST" && parts[0] === "report" && parts.length === 1) {
       return report(env, request);
@@ -40,6 +44,19 @@ async function getNpc(env, name) {
     .bind(name)
     .all();
   return json({ name, tiles: results }, 200, { "Cache-Control": "public, max-age=3600" });
+}
+
+async function getChunk(env, regionText) {
+  const region = Number(regionText);
+  if (!Number.isInteger(region) || region < 0 || region > 0xffff) {
+    return json({ error: "bad region" }, 400);
+  }
+  const { results } = await env.DB.prepare(
+    "SELECT name, npc_id AS id, x, y, plane, reports FROM spawns WHERE region = ? ORDER BY name, x, y, plane",
+  )
+    .bind(region)
+    .all();
+  return json({ region, tiles: results }, 200, { "Cache-Control": "public, max-age=3600" });
 }
 
 async function report(env, request) {
@@ -64,9 +81,9 @@ async function report(env, request) {
     seen.add(key);
     statements.push(
       env.DB.prepare(
-        "INSERT INTO spawns (name, npc_id, x, y, plane, reports, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, 1, ?, ?) " +
+        "INSERT INTO spawns (name, npc_id, x, y, plane, region, reports, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) " +
           "ON CONFLICT (name, x, y, plane) DO UPDATE SET reports = reports + 1, last_seen = excluded.last_seen",
-      ).bind(t.name, t.id, t.x, t.y, t.plane, now, now),
+      ).bind(t.name, t.id, t.x, t.y, t.plane, ((t.x >> 6) << 8) | (t.y >> 6), now, now),
     );
   }
   if (statements.length > 0) {
