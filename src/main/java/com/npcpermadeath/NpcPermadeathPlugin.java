@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Hitsplat;
 import net.runelite.api.MenuAction;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
@@ -146,9 +147,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event)
 	{
-		if (event.getActor() instanceof NPC && event.getHitsplat().isMine())
+		if (!(event.getActor() instanceof NPC))
 		{
-			tracker.recordMyHit(((NPC) event.getActor()).getIndex());
+			return;
+		}
+		Hitsplat hitsplat = event.getHitsplat();
+		if (hitsplat.isMine() || hitsplat.isOthers())
+		{
+			tracker.recordHit(((NPC) event.getActor()).getIndex(), hitsplat.getAmount(), hitsplat.isMine());
 		}
 	}
 
@@ -204,10 +210,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		Player local = client.getLocalPlayer();
-		boolean killedByMe = tracker.wasDamagedByMe(index) || (local != null && npc.getInteracting() == local);
-		tracker.recordDeath(index, npc.getId(), name, location.getRegionID(), killedByMe, config.onlyMyKills(),
-			client.getTickCount());
+		tracker.recordDeath(index, npc.getId(), name, location.getRegionID(), tracker.isMyKill(index),
+			config.onlyMyKills(), client.getTickCount());
 	}
 
 	// ---- hiding ------------------------------------------------------------

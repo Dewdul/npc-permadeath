@@ -2,11 +2,9 @@ package com.npcpermadeath;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 import lombok.Value;
 
@@ -89,7 +87,15 @@ class PermadeathTracker
 		int tick;
 	}
 
-	private final Set<Integer> damagedByMe = new HashSet<>();
+	/** Damage dealt to an NPC by the player and by everyone else. */
+	static class DamageTally
+	{
+		int mine;
+		int others;
+		boolean firstHitMine;
+	}
+
+	private final Map<Integer, DamageTally> damage = new HashMap<>();
 	private final Map<Integer, PendingDeath> pending = new HashMap<>();
 
 	private final Map<AreaKey, Integer> kills = new HashMap<>();
@@ -116,14 +122,37 @@ class PermadeathTracker
 		return hidden.computeIfAbsent(currentWorld, w -> new HashMap<>());
 	}
 
-	void recordMyHit(int index)
+	void recordHit(int index, int amount, boolean mine)
 	{
-		damagedByMe.add(index);
+		DamageTally tally = damage.get(index);
+		if (tally == null)
+		{
+			tally = new DamageTally();
+			tally.firstHitMine = mine;
+			damage.put(index, tally);
+		}
+		if (mine)
+		{
+			tally.mine += amount;
+		}
+		else
+		{
+			tally.others += amount;
+		}
 	}
 
-	boolean wasDamagedByMe(int index)
+	/**
+	 * Whether the kill would be the player's by the game's loot rule: most
+	 * damage dealt, ties going to whoever hit first.
+	 */
+	boolean isMyKill(int index)
 	{
-		return damagedByMe.contains(index);
+		DamageTally tally = damage.get(index);
+		if (tally == null || tally.mine == 0)
+		{
+			return false;
+		}
+		return tally.mine > tally.others || (tally.mine == tally.others && tally.firstHitMine);
 	}
 
 	/**
@@ -153,7 +182,7 @@ class PermadeathTracker
 	 */
 	AreaKey recordDespawn(int index, int npcId, long now)
 	{
-		damagedByMe.remove(index);
+		damage.remove(index);
 		PendingDeath death = pending.remove(index);
 		if (death == null || death.getNpcId() != npcId)
 		{
@@ -311,7 +340,7 @@ class PermadeathTracker
 	/** Forgets in-flight state that only means something on one world. */
 	void clearSession()
 	{
-		damagedByMe.clear();
+		damage.clear();
 		pending.clear();
 	}
 

@@ -31,7 +31,7 @@ hiding works without it.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Only NPCs you killed | on | Only NPCs you damaged, or that were fighting you, count. Off means any NPC you see die. |
+| Only your kills | on | Only NPCs whose kill would be yours count: you dealt the most damage, ties to whoever hit first, the same rule the game uses for loot. Off means any NPC you see die. |
 | Include bosses | off | Bosses (anything the OSRS Wiki lists as a boss) can be killed for good. Off means they always respawn. |
 | Include instanced areas | off | Count kills and hide NPCs inside instances such as boss rooms and raids. |
 | Max combat level | 0 | NPCs above this level always respawn. 0 means no limit. |

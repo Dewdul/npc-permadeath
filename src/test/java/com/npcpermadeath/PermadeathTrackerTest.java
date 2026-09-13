@@ -27,9 +27,50 @@ public class PermadeathTrackerTest
 
 	private void kill(int index)
 	{
-		tracker.recordMyHit(index);
-		assertTrue(tracker.recordDeath(index, GOBLIN, NAME, LUMBRIDGE, true, true, 100));
+		tracker.recordHit(index, 5, true);
+		assertTrue(tracker.recordDeath(index, GOBLIN, NAME, LUMBRIDGE, tracker.isMyKill(index), true, 100));
 		assertEquals(AREA, tracker.recordDespawn(index, GOBLIN, NOW));
+	}
+
+	@Test
+	public void killIsMineOnlyWhenIDealtTheMostDamage()
+	{
+		assertFalse(tracker.isMyKill(7));
+
+		tracker.recordHit(7, 3, true);
+		tracker.recordHit(7, 2, false);
+		assertTrue(tracker.isMyKill(7));
+
+		tracker.recordHit(7, 4, false);
+		assertFalse(tracker.isMyKill(7));
+	}
+
+	@Test
+	public void tiedDamageGoesToWhoeverHitFirst()
+	{
+		tracker.recordHit(7, 4, true);
+		tracker.recordHit(7, 4, false);
+		assertTrue(tracker.isMyKill(7));
+
+		tracker.recordHit(8, 4, false);
+		tracker.recordHit(8, 4, true);
+		assertFalse(tracker.isMyKill(8));
+	}
+
+	@Test
+	public void zeroDamageFromMeIsNotAKill()
+	{
+		tracker.recordHit(7, 0, true);
+		assertFalse(tracker.isMyKill(7));
+	}
+
+	@Test
+	public void damageTallyResetsWhenTheNpcDespawns()
+	{
+		tracker.recordHit(7, 9, true);
+		tracker.recordDespawn(7, GOBLIN, NOW);
+
+		assertFalse(tracker.isMyKill(7));
 	}
 
 	@Test
