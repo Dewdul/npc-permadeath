@@ -27,26 +27,44 @@ hiding works without it.
 
 ## Settings
 
+**Which NPCs count**
+
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | Only NPCs you killed | on | Only NPCs you damaged, or that were fighting you, count. Off means any NPC you see die. |
-| Announce kills in chat | on | Show the area tally after each kill. |
+| Include bosses | off | Bosses (anything the OSRS Wiki lists as a boss) can be killed for good. Off means they always respawn. |
+| Include instanced areas | off | Count kills and hide NPCs inside instances such as boss rooms and raids. |
+| Max combat level | 0 | NPCs above this level always respawn. 0 means no limit. |
 | Only these NPCs | blank | Comma-separated names (wildcards allowed), e.g. `Goblin, Cow*`. Blank means everything. |
-| Forget all slain NPCs | off | Tick to bring everything back. Unticks itself. |
+| Never these NPCs | blank | Names that always respawn, same format. |
 
-Chat commands: `::permadeath` shows the tallies for the area you are standing
-in, `::permadeath reset` forgets everything.
+**Experience**
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Reveal NPCs attacking you | on | A hidden NPC that attacks you becomes visible so you can fight back, and another of its kind is hidden instead. |
+| Hide loot from hidden NPCs | on | Drops from a hidden NPC (killed by a cannon or area attacks) are invisible and cannot be picked up. Other items on the tile are unaffected. |
+| Announce kills in chat | on | Show the area tally after each kill. |
+
+*Forget all slain NPCs* brings everything back and unticks itself. Chat
+commands: `::permadeath` shows the tallies for the area you are standing in,
+`::permadeath reset` forgets everything.
+
+The boss list lives in `src/main/resources/com/npcpermadeath/bosses.txt` and
+is regenerated from the wiki with `python tools/generate_bosses.py`.
 
 ## Things to know
 
-- This applies to every NPC unless you set a name filter. Kill a boss or a
-  quest NPC once and its respawn (or a substitute) will be hidden until you
-  reset. Use *Only these NPCs* if you only want it for goblins and the like.
-- Instanced areas are ignored entirely.
+- Hidden NPCs that are aggressive can still attack you. With *Reveal NPCs
+  attacking you* on, the attacker pops back into view and a different NPC
+  takes its place in the hidden count.
 - Areas are map chunks, so a wandering NPC that strays over a chunk border
   counts toward the neighbouring area.
 - Hidden choices that have not been seen for two weeks are dropped and refilled
   from whatever is in view, so the count stays right after game updates.
+- Loot hiding covers the item models and the right-click options. Other
+  plugins that draw ground item text (like Ground Items) may still label the
+  tile.
 
 ## Building
 

@@ -3,15 +3,23 @@ package com.npcpermadeath;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
 import com.google.inject.Provides;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Renderable;
@@ -21,6 +29,10 @@ import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.InteractingChanged;
+import net.runelite.api.events.ItemDespawned;
+import net.runelite.api.events.ItemSpawned;
+import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.client.callback.ClientThread;
@@ -71,9 +83,12 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private Gson gson;
 
 	private final PermadeathTracker tracker = new PermadeathTracker();
+	private final HiddenLoot loot = new HiddenLoot();
 	private SpawnTotals totals;
 
+	private Set<String> bosses = new HashSet<>();
 	private List<String> nameFilter = new ArrayList<>();
+	private List<String> ignoredNames = new ArrayList<>();
 	private int currentWorld = -1;
 	private boolean loaded;
 	private int tickCounter;
@@ -87,7 +102,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Override
 	protected void startUp()
 	{
+		bosses = loadBosses();
 		nameFilter = parseNames(config.npcNames());
+		ignoredNames = parseNames(config.ignoredNames());
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
 		renderCallbackManager.register(this);
@@ -107,6 +124,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		saveIfDirty();
 		tracker.clearAll();
 		tracker.markSaved();
+		loot.clear();
 		loaded = false;
 		currentWorld = -1;
 	}
@@ -120,8 +138,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			NPC npc = (NPC) renderable;
 			return !tracker.isHidden(npc.getIndex(), npc.getId());
 		}
-		return true;
+		return !loot.isCursed(renderable);
 	}
+
+	// ---- kills -------------------------------------------------------------
 
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event)
@@ -148,6 +168,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		if (npc.isDead())
 		{
 			handleDeath(npc);
+			if (config.hideLoot() && tracker.isHidden(npc.getIndex(), npc.getId()))
+			{
+				loot.armTile(npc.getWorldLocation(), client.getTickCount());
+			}
 		}
 		AreaKey area = tracker.recordDespawn(npc.getIndex(), npc.getId(), now());
 		if (area != null)
@@ -162,13 +186,13 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private void handleDeath(NPC npc)
 	{
 		int index = npc.getIndex();
-		if (tracker.isPending(index) || inInstance())
+		if (tracker.isPending(index))
 		{
 			return;
 		}
 		String name = cleanName(npc);
-		WorldPoint location = npc.getWorldLocation();
-		if (name == null || location == null || !matchesFilter(name))
+		WorldPoint location = areaLocation(npc);
+		if (name == null || location == null || !isEligible(npc, name))
 		{
 			return;
 		}
@@ -178,21 +202,20 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			client.getTickCount());
 	}
 
+	// ---- hiding ------------------------------------------------------------
+
 	@Subscribe
 	public void onNpcSpawned(NpcSpawned event)
 	{
 		considerNpc(event.getNpc());
 	}
 
+	/** Hides the NPC if its area still owes kills. */
 	private void considerNpc(NPC npc)
 	{
-		if (inInstance())
-		{
-			return;
-		}
 		String name = cleanName(npc);
-		WorldPoint location = npc.getWorldLocation();
-		if (name == null || location == null)
+		WorldPoint location = areaLocation(npc);
+		if (name == null || location == null || !isEligible(npc, name) || isAttackingMe(npc))
 		{
 			return;
 		}
@@ -205,9 +228,106 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	}
 
 	@Subscribe
+	public void onInteractingChanged(InteractingChanged event)
+	{
+		if (!config.revealAttackers() || !(event.getSource() instanceof NPC))
+		{
+			return;
+		}
+		NPC npc = (NPC) event.getSource();
+		Player local = client.getLocalPlayer();
+		if (local == null || event.getTarget() != local || !tracker.isHidden(npc.getIndex(), npc.getId()))
+		{
+			return;
+		}
+		AreaKey area = tracker.release(npc.getIndex());
+		if (area == null)
+		{
+			return;
+		}
+		log.debug("Revealing {} (index {}) because it is attacking the player", area.getName(), npc.getIndex());
+		backfill(area);
+	}
+
+	/** After a reveal, hide another NPC of the same kind in the area if one is in view. */
+	private void backfill(AreaKey area)
+	{
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (!tracker.hasDeficit(area))
+			{
+				return;
+			}
+			if (!area.getName().equals(cleanName(npc)) || tracker.isHidden(npc.getIndex(), npc.getId()))
+			{
+				continue;
+			}
+			considerNpc(npc);
+		}
+	}
+
+	private boolean isAttackingMe(NPC npc)
+	{
+		Player local = client.getLocalPlayer();
+		return config.revealAttackers() && local != null && npc.getInteracting() == local;
+	}
+
+	// ---- loot --------------------------------------------------------------
+
+	@Subscribe
+	public void onItemSpawned(ItemSpawned event)
+	{
+		if (config.hideLoot())
+		{
+			loot.onItemSpawned(event.getItem(), event.getTile().getWorldLocation(), event.getTile().getSceneLocation(),
+				client.getTickCount());
+		}
+	}
+
+	@Subscribe
+	public void onItemDespawned(ItemDespawned event)
+	{
+		loot.onItemDespawned(event.getItem());
+	}
+
+	@Subscribe
+	public void onMenuEntryAdded(MenuEntryAdded event)
+	{
+		if (loot.cursedCount() == 0 || !isGroundItemAction(event.getType()))
+		{
+			return;
+		}
+		if (loot.blocksMenu(event.getIdentifier(), event.getActionParam0(), event.getActionParam1()))
+		{
+			client.getMenu().removeMenuEntry(event.getMenuEntry());
+		}
+	}
+
+	private static boolean isGroundItemAction(int type)
+	{
+		switch (MenuAction.of(type))
+		{
+			case GROUND_ITEM_FIRST_OPTION:
+			case GROUND_ITEM_SECOND_OPTION:
+			case GROUND_ITEM_THIRD_OPTION:
+			case GROUND_ITEM_FOURTH_OPTION:
+			case GROUND_ITEM_FIFTH_OPTION:
+			case EXAMINE_ITEM_GROUND:
+			case ITEM_USE_ON_GROUND_ITEM:
+			case WIDGET_TARGET_ON_GROUND_ITEM:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	// ---- lifecycle ---------------------------------------------------------
+
+	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		tickCounter++;
+		loot.tick(client.getTickCount());
 		if (tickCounter % PRUNE_INTERVAL_TICKS == 0)
 		{
 			tracker.prune(client.getTickCount(), now());
@@ -230,6 +350,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			case LOGIN_SCREEN:
 				saveIfDirty();
 				tracker.clearSession();
+				loot.clear();
 				currentWorld = -1;
 				break;
 			default:
@@ -266,14 +387,23 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		if ("npcNames".equals(event.getKey()))
+		switch (event.getKey())
 		{
-			nameFilter = parseNames(config.npcNames());
-		}
-		else if (NpcPermadeathConfig.KEY_FORGET_ALL.equals(event.getKey()) && config.forgetAll())
-		{
-			configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
-			clientThread.invoke(this::forgetAll);
+			case "npcNames":
+				nameFilter = parseNames(config.npcNames());
+				break;
+			case "ignoredNames":
+				ignoredNames = parseNames(config.ignoredNames());
+				break;
+			case NpcPermadeathConfig.KEY_FORGET_ALL:
+				if (config.forgetAll())
+				{
+					configManager.setConfiguration(NpcPermadeathConfig.GROUP, NpcPermadeathConfig.KEY_FORGET_ALL, false);
+					clientThread.invoke(this::forgetAll);
+				}
+				break;
+			default:
+				break;
 		}
 	}
 
@@ -335,9 +465,12 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private void forgetAll()
 	{
 		tracker.clearAll();
+		loot.clear();
 		saveState();
 		message("NPC Permadeath: all slain NPCs forgotten.");
 	}
+
+	// ---- persistence -------------------------------------------------------
 
 	private void loadState()
 	{
@@ -386,6 +519,45 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 	}
 
+	// ---- eligibility -------------------------------------------------------
+
+	/** Whether this NPC can be killed for good under the current settings. */
+	private boolean isEligible(NPC npc, String name)
+	{
+		if (inInstance() && !config.includeInstances())
+		{
+			return false;
+		}
+		if (!config.includeBosses() && bosses.contains(name.toLowerCase()))
+		{
+			return false;
+		}
+		int maxLevel = config.maxCombatLevel();
+		if (maxLevel > 0 && npc.getCombatLevel() > maxLevel)
+		{
+			return false;
+		}
+		if (matchesAny(ignoredNames, name))
+		{
+			return false;
+		}
+		return nameFilter.isEmpty() || matchesAny(nameFilter, name);
+	}
+
+	/**
+	 * The tile used to place the NPC in an area. Inside an instance the
+	 * template coordinates are used so the same boss room always maps to the
+	 * same area no matter where the instance was built.
+	 */
+	private WorldPoint areaLocation(NPC npc)
+	{
+		if (inInstance())
+		{
+			return npc.getLocalLocation() == null ? null : WorldPoint.fromLocalInstance(client, npc.getLocalLocation());
+		}
+		return npc.getWorldLocation();
+	}
+
 	private boolean inInstance()
 	{
 		return client.getTopLevelWorldView().isInstance();
@@ -402,13 +574,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		return clean.isEmpty() ? null : clean;
 	}
 
-	private boolean matchesFilter(String name)
+	private static boolean matchesAny(List<String> patterns, String name)
 	{
-		if (nameFilter.isEmpty())
-		{
-			return true;
-		}
-		for (String pattern : nameFilter)
+		for (String pattern : patterns)
 		{
 			if (WildcardMatcher.matches(pattern, name))
 			{
@@ -424,6 +592,34 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.map(String::trim)
 			.filter(s -> !s.isEmpty())
 			.collect(Collectors.toList());
+	}
+
+	private static Set<String> loadBosses()
+	{
+		Set<String> names = new HashSet<>();
+		try (InputStream in = NpcPermadeathPlugin.class.getResourceAsStream("bosses.txt"))
+		{
+			if (in == null)
+			{
+				log.warn("bosses.txt is missing; the boss filter will do nothing");
+				return names;
+			}
+			BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+			String line;
+			while ((line = reader.readLine()) != null)
+			{
+				line = line.trim();
+				if (!line.isEmpty() && !line.startsWith("#"))
+				{
+					names.add(line.toLowerCase());
+				}
+			}
+		}
+		catch (IOException e)
+		{
+			log.warn("Could not read bosses.txt", e);
+		}
+		return names;
 	}
 
 	private static long now()

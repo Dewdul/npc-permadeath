@@ -211,6 +211,21 @@ public class PermadeathTrackerTest
 	}
 
 	@Test
+	public void releasingAHiddenNpcLeavesADeficitToBackfill()
+	{
+		kill(7);
+
+		assertEquals(AREA, tracker.release(7));
+
+		assertFalse(tracker.isHidden(7, GOBLIN));
+		assertTrue(tracker.hasDeficit(AREA));
+		assertEquals(1, tracker.kills(AREA));
+		assertEquals(SpawnOutcome.SUBSTITUTE, tracker.recordSpawn(9, GOBLIN, NAME, LUMBRIDGE, NOW));
+		assertFalse(tracker.hasDeficit(AREA));
+		assertNull(tracker.release(7));
+	}
+
+	@Test
 	public void killsInRegionListsOnlyThatRegion()
 	{
 		kill(7);

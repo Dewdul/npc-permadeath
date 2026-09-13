@@ -232,6 +232,30 @@ class PermadeathTracker
 		return rec != null && rec.npcId == npcId;
 	}
 
+	/**
+	 * Makes a hidden NPC visible again, for example because it is attacking
+	 * the player. The kill count is untouched, so the area now has a deficit
+	 * that {@link #recordSpawn} fills from the next eligible NPC.
+	 *
+	 * @return the area that now has a deficit, or null if it was not hidden
+	 */
+	AreaKey release(int index)
+	{
+		HiddenNpc rec = here().get(index);
+		if (rec == null)
+		{
+			return null;
+		}
+		remove(index);
+		dirty = true;
+		return rec.area();
+	}
+
+	boolean hasDeficit(AreaKey key)
+	{
+		return hiddenHere(key) < kills(key);
+	}
+
 	int kills(AreaKey key)
 	{
 		return kills.getOrDefault(key, 0);
