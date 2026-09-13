@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
+import javax.swing.SwingUtilities;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -47,6 +48,9 @@ import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.Text;
 import net.runelite.client.util.WildcardMatcher;
 import okhttp3.OkHttpClient;
@@ -85,6 +89,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Inject
 	private Gson gson;
 
+	@Inject
+	private ClientToolbar clientToolbar;
+
 	/** A death whose loot we are waiting on before deciding if it counts. */
 	@Value
 	private static class Decision
@@ -101,6 +108,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private final LootWatcher loot = new LootWatcher();
 	private final List<Decision> pendingDecisions = new ArrayList<>();
 	private SpawnTotals totals;
+	private PermadeathPanel panel;
+	private NavigationButton navButton;
 
 	private Set<String> bosses = new HashSet<>();
 	private List<String> nameFilter = new ArrayList<>();
@@ -123,6 +132,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		ignoredNames = parseNames(config.ignoredNames());
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
+		panel = new PermadeathPanel(areas -> clientThread.invoke(() -> forgetPlace(areas)));
+		navButton = NavigationButton.builder()
+			.tooltip("NPC Permadeath")
+			.icon(ImageUtil.loadImageResource(getClass(), "panel_icon.png"))
+			.priority(8)
+			.panel(panel)
+			.build();
+		clientToolbar.addNavigation(navButton);
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
@@ -137,6 +154,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	protected void shutDown()
 	{
 		renderCallbackManager.unregister(this);
+		clientToolbar.removeNavigation(navButton);
+		navButton = null;
+		panel = null;
 		saveIfDirty();
 		tracker.clearAll();
 		tracker.markSaved();
@@ -253,16 +273,19 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				tracker.forget(d.getIndex());
 				continue;
 			}
-			AreaKey area = tracker.countKill(d.getIndex(), d.getNpcId(), d.getName(), d.getRegion(), now());
+			int region = totals.homeRegion(d.getName(), d.getRegion());
+			AreaKey area = tracker.countKill(d.getIndex(), d.getNpcId(), d.getName(), region, now());
 			if (area != null)
 			{
 				log.debug("Counted kill of {} in region {} (index {})", area.getName(), area.getRegion(), d.getIndex());
 				saveState();
+				refreshPanel();
 				boolean totalKnown = totals.get(area.getName(), area.getRegion()) != null;
 				announce(area);
 				// If the total was missing, say the line again once the lookup fills it in.
 				totals.ensure(area.getName(), now(), () ->
 				{
+					refreshPanel();
 					if (!totalKnown && totals.get(area.getName(), area.getRegion()) != null)
 					{
 						announce(area);
@@ -436,6 +459,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			tracker.clearSession();
 			currentWorld = world;
 			tracker.setCurrentWorld(world);
+			refreshPanel();
 		}
 		if (!loaded)
 		{
@@ -508,12 +532,57 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				+ " kill(s) remembered overall. ::permadeath reset forgets them all.");
 			return;
 		}
-		message("NPC Permadeath, this area:");
+		message("NPC Permadeath, " + placeName(new AreaKey("", region)) + ":");
 		kills.forEach((name, count) ->
 		{
-			AreaKey area = new AreaKey(name, region);
-			message(name + ": " + count + totalSuffix(area) + " slain, " + tracker.hiddenHere(area) + " hidden here");
+			Tally tally = tallyFor(new AreaKey(name, region));
+			message(name + ": " + tally.getKills() + totalSuffix(tally) + " slain, " + tally.getHiddenHere() + " hidden here");
 		});
+	}
+
+	private String placeName(AreaKey area)
+	{
+		String label = totals.label(area.getName(), area.getRegion());
+		return label != null ? label : "Region " + area.getRegion();
+	}
+
+	private void forgetPlace(List<AreaKey> areas)
+	{
+		for (AreaKey area : areas)
+		{
+			tracker.forgetArea(area);
+		}
+		saveState();
+		refreshPanel();
+		if (!areas.isEmpty())
+		{
+			AreaKey first = areas.get(0);
+			message("NPC Permadeath: " + first.getName() + " in " + placeName(first) + " forgotten.");
+		}
+	}
+
+	/** Snapshots the kill list on the client thread and hands it to the panel on the Swing thread. */
+	private void refreshPanel()
+	{
+		PermadeathPanel target = panel;
+		if (target == null)
+		{
+			return;
+		}
+		List<PermadeathPanel.Row> rows = new ArrayList<>();
+		Set<AreaKey> covered = new HashSet<>();
+		for (AreaKey area : tracker.killsByArea().keySet())
+		{
+			if (covered.contains(area))
+			{
+				continue;
+			}
+			Tally tally = tallyFor(area);
+			covered.addAll(tally.getAreas());
+			rows.add(new PermadeathPanel.Row(area.getName(), placeName(area), tally.getAreas(),
+				tally.getKills(), tally.getTotal(), tally.getHiddenHere()));
+		}
+		SwingUtilities.invokeLater(() -> target.update(rows));
 	}
 
 	private void announce(AreaKey area)
@@ -522,13 +591,58 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return;
 		}
-		message(area.getName() + ": " + tracker.kills(area) + totalSuffix(area) + " slain in this area");
+		Tally tally = tallyFor(area);
+		String where = tally.getPlace() == null ? "this area" : tally.getPlace();
+		message(area.getName() + ": " + tally.getKills() + totalSuffix(tally) + " slain in " + where);
 	}
 
-	private String totalSuffix(AreaKey area)
+	private static String totalSuffix(Tally tally)
 	{
-		Integer total = totals.get(area.getName(), area.getRegion());
-		return total == null ? "" : " of " + total;
+		return tally.getTotal() == null ? "" : " of " + tally.getTotal();
+	}
+
+	/** Kills and spawns of one NPC across every region the wiki files under the same place. */
+	@Value
+	static class Tally
+	{
+		/** Wiki place name, or null when only the raw region is known. */
+		String place;
+		List<AreaKey> areas;
+		int kills;
+		Integer total;
+		int hiddenHere;
+	}
+
+	private Tally tallyFor(AreaKey area)
+	{
+		String place = totals.label(area.getName(), area.getRegion());
+		Set<Integer> regions = new HashSet<>();
+		if (place != null)
+		{
+			regions.addAll(totals.regionsOfPlace(area.getName(), place));
+		}
+		regions.add(area.getRegion());
+		List<AreaKey> areas = new ArrayList<>();
+		int kills = 0;
+		int hidden = 0;
+		for (int region : regions)
+		{
+			AreaKey key = new AreaKey(area.getName(), region);
+			int n = tracker.kills(key);
+			if (n > 0)
+			{
+				areas.add(key);
+				kills += n;
+				hidden += tracker.hiddenHere(key);
+			}
+		}
+		Integer total = place == null ? totals.get(area.getName(), area.getRegion())
+			: totals.totalForPlace(area.getName(), place);
+		if (total == null)
+		{
+			total = totals.get(area.getName(), area.getRegion());
+		}
+		return new Tally(place, areas, kills, total, hidden);
 	}
 
 	private void forgetAll()
@@ -536,6 +650,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		tracker.clearAll();
 		loot.clear();
 		saveState();
+		refreshPanel();
 		message("NPC Permadeath: all slain NPCs forgotten.");
 	}
 
@@ -559,6 +674,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		tracker.load(state == null ? new PermadeathTracker.SavedState() : state);
 		loaded = true;
 		log.debug("Loaded {} kills", tracker.totalKills());
+		refreshPanel();
 		// NPCs already in view spawned before the state was known.
 		for (NPC npc : client.getTopLevelWorldView().npcs())
 		{

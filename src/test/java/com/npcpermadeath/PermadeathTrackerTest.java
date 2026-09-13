@@ -275,6 +275,27 @@ public class PermadeathTrackerTest
 	}
 
 	@Test
+	public void forgettingAnAreaBringsItsNpcsBackEverywhere()
+	{
+		kill(7);
+		tracker.countKill(8, 2, "Cow", LUMBRIDGE, NOW);
+		tracker.setCurrentWorld(WORLD + 1);
+		tracker.recordSpawn(50, GOBLIN, NAME, LUMBRIDGE, NOW);
+		tracker.markSaved();
+
+		tracker.forgetArea(AREA);
+
+		assertFalse(tracker.isHidden(50, GOBLIN));
+		assertEquals(0, tracker.kills(AREA));
+		assertEquals(0, tracker.hiddenHere(AREA));
+		tracker.setCurrentWorld(WORLD);
+		assertFalse(tracker.isHidden(7, GOBLIN));
+		assertTrue(tracker.isHidden(8, 2));
+		assertEquals(1, tracker.killsByArea().size());
+		assertTrue(tracker.isDirty());
+	}
+
+	@Test
 	public void killsInRegionListsOnlyThatRegion()
 	{
 		kill(7);

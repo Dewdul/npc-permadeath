@@ -310,6 +310,27 @@ class PermadeathTracker
 		return kills.values().stream().mapToInt(Integer::intValue).sum();
 	}
 
+	/** A snapshot of every kill count. */
+	Map<AreaKey, Integer> killsByArea()
+	{
+		return new HashMap<>(kills);
+	}
+
+	/** Drops the kill count for one NPC in one area and brings its hidden NPCs back on every world. */
+	void forgetArea(AreaKey key)
+	{
+		if (kills.remove(key) == null)
+		{
+			return;
+		}
+		for (Map<Integer, HiddenNpc> world : hidden.values())
+		{
+			world.values().removeIf(rec -> rec.area().equals(key));
+		}
+		hiddenHere.remove(key);
+		dirty = true;
+	}
+
 	/** Kill counts for every NPC type in one region, sorted by name. */
 	Map<String, Integer> killsInRegion(int region)
 	{
