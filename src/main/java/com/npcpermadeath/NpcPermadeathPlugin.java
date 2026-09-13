@@ -807,7 +807,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		refreshPanel();
 	}
 
-	/** Every NPC type known in the chunk plus anything killed there, as panel rows. */
+	/**
+	 * Every NPC type known in the chunk plus anything killed there, as panel
+	 * rows: the ones you have started on first, then the ones fully cleared,
+	 * then the untouched, alphabetical within each group.
+	 */
 	private List<PermadeathPanel.Row> rowsFor(int region)
 	{
 		Set<String> names = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
@@ -820,6 +824,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			rows.add(new PermadeathPanel.Row(area, chunkHeading(area), tracker.kills(area), spawnTotal(area),
 				tracker.hiddenHere(area)));
 		}
+		rows.sort(java.util.Comparator.comparingInt((PermadeathPanel.Row r) -> r.getProgress().ordinal())
+			.thenComparing(r -> r.getArea().getName(), String.CASE_INSENSITIVE_ORDER));
 		return rows;
 	}
 

@@ -31,6 +31,21 @@ import net.runelite.client.ui.PluginPanel;
 /** Sidebar list of everything slain, one section per map chunk. */
 class PermadeathPanel extends PluginPanel
 {
+	/** How far along an NPC type is, in display order. */
+	enum Progress
+	{
+		STARTED(ColorScheme.BRAND_ORANGE),
+		CLEARED(ColorScheme.PROGRESS_ERROR_COLOR),
+		UNTOUCHED(ColorScheme.LIGHT_GRAY_COLOR);
+
+		final Color color;
+
+		Progress(Color color)
+		{
+			this.color = color;
+		}
+	}
+
 	/** One NPC type in one map chunk. */
 	@Value
 	static class Row
@@ -42,6 +57,15 @@ class PermadeathPanel extends PluginPanel
 		/** Spawns in the chunk, or null if unknown. */
 		Integer total;
 		int hiddenHere;
+
+		Progress getProgress()
+		{
+			if (kills == 0)
+			{
+				return Progress.UNTOUCHED;
+			}
+			return total != null && kills >= total ? Progress.CLEARED : Progress.STARTED;
+		}
 	}
 
 	private final Consumer<AreaKey> onForget;
@@ -110,7 +134,6 @@ class PermadeathPanel extends PluginPanel
 			byChunk.forEach((heading, chunkRows) ->
 			{
 				list.add(chunkHeader(heading, chunkRows.get(0).getArea().getRegion()));
-				chunkRows.sort((a, b) -> a.getArea().getName().compareToIgnoreCase(b.getArea().getName()));
 				for (Row row : chunkRows)
 				{
 					list.add(rowPanel(row));
@@ -169,7 +192,7 @@ class PermadeathPanel extends PluginPanel
 
 		JLabel name = new JLabel(row.getArea().getName());
 		name.setFont(FontManager.getRunescapeSmallFont());
-		name.setForeground(Color.WHITE);
+		name.setForeground(row.getProgress() == Progress.UNTOUCHED ? ColorScheme.LIGHT_GRAY_COLOR : Color.WHITE);
 		c.gridx = 0;
 		c.weightx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
@@ -180,11 +203,7 @@ class PermadeathPanel extends PluginPanel
 			: row.getKills() + " / " + row.getTotal();
 		JLabel count = new JLabel(tally, SwingConstants.RIGHT);
 		count.setFont(FontManager.getRunescapeSmallFont());
-		count.setForeground(row.getKills() == 0
-			? ColorScheme.LIGHT_GRAY_COLOR
-			: row.getTotal() != null && row.getKills() >= row.getTotal()
-				? ColorScheme.PROGRESS_ERROR_COLOR
-				: ColorScheme.BRAND_ORANGE);
+		count.setForeground(row.getProgress().color);
 		count.setToolTipText(row.getHiddenHere() + " hidden on this world"
 			+ (row.getTotal() == null ? ", no spawn data yet" : ", " + row.getTotal() + " spawns known in this chunk"));
 		c.gridx = 1;
