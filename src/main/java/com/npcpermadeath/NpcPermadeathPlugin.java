@@ -15,7 +15,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import lombok.Value;
@@ -138,8 +137,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private int currentRegion = -1;
 
 	private Set<String> bosses = new HashSet<>();
-	private List<String> nameFilter = new ArrayList<>();
-	private List<String> ignoredNames = new ArrayList<>();
+	private volatile List<String> nameFilter = new ArrayList<>();
+	private volatile List<String> ignoredNames = new ArrayList<>();
+	private NpcNameIndex nameIndex;
+	private volatile boolean nameScanStarted;
 	private int currentWorld = -1;
 	private boolean loaded;
 	private int tickCounter;
@@ -155,17 +156,22 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		bosses = loadBosses(getClass().getResourceAsStream("bosses.txt"));
 		updater = new DataUpdater(okHttpClient, configManager, clientThread);
-		nameFilter = parseNames(config.npcNames());
-		ignoredNames = parseNames(config.ignoredNames());
+		nameFilter = NameList.parse(config.npcNames());
+		ignoredNames = NameList.parse(config.ignoredNames());
+		nameIndex = new NpcNameIndex();
 		totals = new SpawnTotals(okHttpClient, gson, configManager, clientThread);
 		totals.load();
 		loadSeedSpawns();
 		learner.load(loadGlobalList(KEY_LEARNED));
+		nameIndex.setSeedNames(learner.allNames());
 		clientThread.invoke(this::refreshData);
 		panel = new PermadeathPanel(
 			area -> clientThread.invoke(() -> forgetArea(area)),
 			this::openSettings,
-			region -> clientThread.invoke(() -> showOnMap(region)));
+			region -> clientThread.invoke(() -> showOnMap(region)),
+			nameIndex::suggest,
+			(key, csv) -> configManager.setConfiguration(NpcPermadeathConfig.GROUP, key, csv));
+		refreshPanelFilters();
 		navButton = NavigationButton.builder()
 			.tooltip("NPC Permadeath")
 			.icon(ImageUtil.loadImageResource(getClass(), "panel_icon.png"))
@@ -187,9 +193,40 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		});
 	}
 
+	/** Reads the NPC definitions a slice at a time on the client thread, once per session. */
+	private void startNameScan()
+	{
+		NpcNameIndex index = nameIndex;
+		if (index == null || nameScanStarted)
+		{
+			return;
+		}
+		nameScanStarted = true;
+		clientThread.invokeLater(() -> index.step(client::getNpcDefinition));
+	}
+
+	/** Shows the configured name filters in the panel, from whichever thread the config changed on. */
+	private void refreshPanelFilters()
+	{
+		PermadeathPanel target = panel;
+		if (target == null)
+		{
+			return;
+		}
+		String never = config.ignoredNames();
+		String only = config.npcNames();
+		SwingUtilities.invokeLater(() -> target.setFilters(never, only));
+	}
+
 	@Override
 	protected void shutDown()
 	{
+		if (nameIndex != null)
+		{
+			nameIndex.cancel();
+		}
+		nameIndex = null;
+		nameScanStarted = false;
 		renderCallbackManager.unregister(this);
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(mapOverlay);
@@ -555,6 +592,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 
 	private void enterWorld(int world)
 	{
+		startNameScan();
 		if (world != currentWorld)
 		{
 			saveIfDirty();
@@ -585,11 +623,13 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 		switch (event.getKey())
 		{
-			case "npcNames":
-				nameFilter = parseNames(config.npcNames());
+			case NpcPermadeathConfig.KEY_NPC_NAMES:
+				nameFilter = NameList.parse(config.npcNames());
+				refreshPanelFilters();
 				break;
-			case "ignoredNames":
-				ignoredNames = parseNames(config.ignoredNames());
+			case NpcPermadeathConfig.KEY_IGNORED_NAMES:
+				ignoredNames = NameList.parse(config.ignoredNames());
+				refreshPanelFilters();
 				break;
 			case NpcPermadeathConfig.KEY_FORGET_ALL:
 				if (config.forgetAll())
@@ -975,6 +1015,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		try
 		{
 			learner.loadSeed(new ByteArrayInputStream(gzipped));
+			NpcNameIndex index = nameIndex;
+			if (index != null)
+			{
+				index.setSeedNames(learner.allNames());
+			}
 			log.debug("Spawn tiles known after update: {}", learner.seedCount());
 		}
 		catch (IOException e)
@@ -1151,14 +1196,6 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			}
 		}
 		return false;
-	}
-
-	private static List<String> parseNames(String csv)
-	{
-		return Text.fromCSV(csv).stream()
-			.map(String::trim)
-			.filter(s -> !s.isEmpty())
-			.collect(Collectors.toList());
 	}
 
 	private static Set<String> loadBosses(InputStream source)

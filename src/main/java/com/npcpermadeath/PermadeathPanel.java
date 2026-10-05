@@ -15,6 +15,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -72,8 +74,17 @@ class PermadeathPanel extends PluginPanel
 	private final Consumer<Integer> onShowOnMap;
 	private final JLabel summary = new JLabel();
 	private final JPanel list = new JPanel();
+	private final JLabel filterHeader = new JLabel();
+	private final JPanel filterBody = new JPanel(new GridBagLayout());
+	private final NameFilterEditor neverEditor;
+	private final NameFilterEditor onlyEditor;
 
-	PermadeathPanel(Consumer<AreaKey> onForget, Runnable onOpenSettings, Consumer<Integer> onShowOnMap)
+	/**
+	 * @param suggestNames NPC names matching some typed text, given the text and a limit
+	 * @param onFilterChanged called with the config key and the new comma-separated text when the user edits a name filter
+	 */
+	PermadeathPanel(Consumer<AreaKey> onForget, Runnable onOpenSettings, Consumer<Integer> onShowOnMap,
+		BiFunction<String, Integer, List<String>> suggestNames, BiConsumer<String, String> onFilterChanged)
 	{
 		super(false);
 		this.onForget = onForget;
@@ -99,13 +110,72 @@ class PermadeathPanel extends PluginPanel
 		summary.setFont(FontManager.getRunescapeSmallFont());
 		summary.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		header.add(summary, BorderLayout.SOUTH);
-		add(header, BorderLayout.NORTH);
+
+		neverEditor = new NameFilterEditor("Never these NPCs", "Always respawn as normal. Pick a name or type one, "
+			+ "wildcards like Cow* work.", "None.", suggestNames, names ->
+		{
+			onFilterChanged.accept(NpcPermadeathConfig.KEY_IGNORED_NAMES, NameList.toCsv(names));
+			updateFilterHeader();
+		});
+		onlyEditor = new NameFilterEditor("Only these NPCs", "Only these can be killed for good. "
+			+ "Leave empty for every NPC.", "Empty: every NPC counts.", suggestNames, names ->
+		{
+			onFilterChanged.accept(NpcPermadeathConfig.KEY_NPC_NAMES, NameList.toCsv(names));
+			updateFilterHeader();
+		});
+		filterBody.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		filterBody.setBorder(BorderFactory.createEmptyBorder(2, 0, 8, 0));
+		NameFilterEditor.stack(filterBody, neverEditor, 0);
+		NameFilterEditor.stack(filterBody, onlyEditor, 10);
+		filterBody.setVisible(false);
+		filterHeader.setFont(FontManager.getRunescapeBoldFont());
+		filterHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		filterHeader.setBorder(BorderFactory.createEmptyBorder(2, 0, 4, 0));
+		filterHeader.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		filterHeader.setToolTipText("Choose which NPCs this applies to");
+		filterHeader.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				filterBody.setVisible(!filterBody.isVisible());
+				updateFilterHeader();
+				PermadeathPanel.this.revalidate();
+				PermadeathPanel.this.repaint();
+			}
+		});
+		JPanel filters = new JPanel(new BorderLayout());
+		filters.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		filters.add(filterHeader, BorderLayout.NORTH);
+		filters.add(filterBody, BorderLayout.CENTER);
+		updateFilterHeader();
+
+		JPanel north = new JPanel(new BorderLayout());
+		north.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		north.add(header, BorderLayout.NORTH);
+		north.add(filters, BorderLayout.CENTER);
+		add(north, BorderLayout.NORTH);
 
 		list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
 		list.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		add(list, BorderLayout.CENTER);
 
 		update(Collections.emptyList());
+	}
+
+	/** Shows the name filters held in the config. Must be called on the Swing thread. */
+	void setFilters(String neverCsv, String onlyCsv)
+	{
+		neverEditor.setEntries(NameList.parse(neverCsv));
+		onlyEditor.setEntries(NameList.parse(onlyCsv));
+		updateFilterHeader();
+	}
+
+	private void updateFilterHeader()
+	{
+		int active = neverEditor.getEntries().size() + onlyEditor.getEntries().size();
+		String counts = active == 0 ? "" : " (" + active + ")";
+		filterHeader.setText((filterBody.isVisible() ? "v " : "> ") + "NPC filters" + counts);
 	}
 
 	/** Rebuilds the list. Must be called on the Swing thread. */

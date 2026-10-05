@@ -159,6 +159,17 @@ class SpawnLearner
 		return byName == null ? Collections.emptySet() : new TreeSet<>(byName.keySet());
 	}
 
+	/** Every distinct NPC name known to spawn anywhere, sorted. */
+	Set<String> allNames()
+	{
+		Set<String> names = new TreeSet<>();
+		for (Map<String, Set<SpawnTile>> byName : index.values())
+		{
+			names.addAll(byName.keySet());
+		}
+		return names;
+	}
+
 	boolean hasSpawns(int region)
 	{
 		return index.containsKey(region);

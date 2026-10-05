@@ -35,6 +35,16 @@ you start on them, with an `x` on rows with kills to forget those kills and
 bring the NPCs back. Click a heading to centre the world map on that chunk;
 the Settings button opens the plugin settings.
 
+The collapsible **NPC filters** section edits the two name lists from the
+settings table below, *Never these NPCs* first. Type in the box and a list of
+matching NPC names drops down, drawn from every attackable NPC in the game
+client's own definitions (the bundled spawn data's names are offered for the
+first moments after login, while the client's list is still being read). Pick
+one with the mouse or with the up and down arrows and Enter, or press Enter on
+free text such as `Cow*` to add exactly what you typed. Each entry has an `x`
+to remove it. The panel and the settings page edit the same two settings, so
+they always agree.
+
 On the world map every chunk with known NPCs is outlined: green if nothing
 there has been killed, orange if something has, red if every NPC type in it
 is gone. Hover a chunk for the full list with kills and totals.
@@ -70,8 +80,8 @@ is the largest of them:
 | Include bosses | on | Bosses (anything the OSRS Wiki lists as a boss) can be killed for good. Off means they always respawn. |
 | Include instanced areas | on | Count kills and hide NPCs inside instances such as boss rooms and raids. |
 | Max combat level | 0 | NPCs above this level always respawn. 0 means no limit. |
-| Only these NPCs | blank | Comma-separated names (wildcards allowed), e.g. `Goblin, Cow*`. Blank means everything. |
-| Never these NPCs | blank | Names that always respawn, same format. |
+| Only these NPCs | blank | Comma-separated names (wildcards allowed), e.g. `Goblin, Cow*`. Blank means everything. Also editable from the panel, with name suggestions as you type. |
+| Never these NPCs | blank | Names that always respawn, same format. Also editable from the panel, with name suggestions as you type. |
 
 **Experience**
 
