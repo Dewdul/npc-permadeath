@@ -148,7 +148,7 @@ public interface NpcPermadeathConfig extends Config
 	)
 	default boolean ghosts()
 	{
-		return false;
+		return true;
 	}
 
 	@Range(min = 10, max = 80)

@@ -96,7 +96,7 @@ is the largest of them:
 | Reveal NPCs attacking you | on | A hidden NPC that attacks you becomes visible so you can fight back, and another of its kind is hidden instead. |
 | Hide loot from hidden NPCs | on | Drops from a hidden NPC (killed by a cannon or area attacks) are invisible and cannot be picked up. Other items on the tile are unaffected. |
 | Announce kills in chat | on | Show the area tally after each kill. |
-| Show slain NPCs as ghosts | off | Hidden NPCs are drawn as translucent ghosts that follow the real NPC around instead of vanishing. Ghosts cannot be clicked, attacked or looted. |
+| Show slain NPCs as ghosts | on | Hidden NPCs are drawn as translucent ghosts that follow the real NPC around instead of vanishing. Ghosts cannot be clicked, attacked or looted. |
 | Ghost opacity | 15 | How solid ghosts look, 10 to 80 percent. |
 | Pale ghost colour | on | Recolour ghosts a pale blue-white instead of the NPC's own colours. |
 
