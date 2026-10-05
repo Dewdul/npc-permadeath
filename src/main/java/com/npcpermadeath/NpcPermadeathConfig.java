@@ -161,7 +161,7 @@ public interface NpcPermadeathConfig extends Config
 	)
 	default int ghostOpacity()
 	{
-		return 35;
+		return 15;
 	}
 
 	@ConfigItem(
