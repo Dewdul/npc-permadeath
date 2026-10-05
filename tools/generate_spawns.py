@@ -38,6 +38,14 @@ def main():
         f.write("# name|id|x|y|plane, attackable NPC spawns from mejrs/data_osrs\n")
         for line in sorted(lines):
             f.write(line + "\n")
+    # Rewrite with mtime=0 and no file name so the output is byte-identical
+    # when the data has not changed; the weekly job then only commits real
+    # changes and installed plugins do not re-download identical data.
+    with gzip.open(OUT, "rb") as f:
+        content = f.read()
+    with open(OUT, "wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as f:
+            f.write(content)
     print(f"wrote {len(lines)} spawns ({OUT.stat().st_size // 1024} KB) to {OUT}")
 
 
