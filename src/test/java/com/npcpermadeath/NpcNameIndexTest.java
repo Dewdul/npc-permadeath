@@ -4,7 +4,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import java.lang.reflect.Proxy;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -19,23 +18,6 @@ public class NpcNameIndexTest
 	private static final String[] PEACEFUL = {"Talk-to", null, null, null, null};
 
 	private final NpcNameIndex index = new NpcNameIndex();
-
-	private static NPCComposition definition(String name, String[] actions)
-	{
-		return (NPCComposition) Proxy.newProxyInstance(NpcNameIndexTest.class.getClassLoader(),
-			new Class<?>[]{NPCComposition.class}, (proxy, method, args) ->
-			{
-				switch (method.getName())
-				{
-					case "getName":
-						return name;
-					case "getActions":
-						return actions;
-					default:
-						throw new UnsupportedOperationException(method.getName());
-				}
-			});
-	}
 
 	private static List<String> sorted(String... names)
 	{
@@ -146,12 +128,12 @@ public class NpcNameIndexTest
 	{
 		index.setSeedNames(sorted("Seed only"));
 		Map<Integer, NPCComposition> table = new HashMap<>();
-		table.put(0, definition("Hans", PEACEFUL));
-		table.put(1, definition("Goblin", FIGHTABLE));
-		table.put(2, definition("<col=00ff00>Goblin</col>", FIGHTABLE));
-		table.put(3, definition("null", FIGHTABLE));
-		table.put(5, definition("Cow", FIGHTABLE));
-		table.put(9000, definition("Giant rat", FIGHTABLE));
+		table.put(0, new FakeNpcComposition("Hans", PEACEFUL));
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("<col=00ff00>Goblin</col>", FIGHTABLE));
+		table.put(3, new FakeNpcComposition("null", FIGHTABLE));
+		table.put(5, new FakeNpcComposition("Cow", FIGHTABLE));
+		table.put(9000, new FakeNpcComposition("Giant rat", FIGHTABLE));
 
 		assertFalse(index.isComplete());
 		assertEquals(sorted("Seed only"), suggest("seed"));
@@ -169,7 +151,7 @@ public class NpcNameIndexTest
 	public void scanReachesTheKnownMaximumAcrossLongGaps()
 	{
 		Map<Integer, NPCComposition> table = new HashMap<>();
-		table.put(NpcNameIndex.KNOWN_MAX_ID, definition("Last imp", FIGHTABLE));
+		table.put(NpcNameIndex.KNOWN_MAX_ID, new FakeNpcComposition("Last imp", FIGHTABLE));
 
 		int slices = scan(table);
 
@@ -181,8 +163,8 @@ public class NpcNameIndexTest
 	public void scanKeepsGoingPastTheKnownMaximumWhileNamesTurnUp()
 	{
 		Map<Integer, NPCComposition> table = new HashMap<>();
-		table.put(NpcNameIndex.KNOWN_MAX_ID, definition("Last imp", FIGHTABLE));
-		table.put(NpcNameIndex.KNOWN_MAX_ID + NpcNameIndex.EMPTY_RUN_LIMIT - 1, definition("New boss", FIGHTABLE));
+		table.put(NpcNameIndex.KNOWN_MAX_ID, new FakeNpcComposition("Last imp", FIGHTABLE));
+		table.put(NpcNameIndex.KNOWN_MAX_ID + NpcNameIndex.EMPTY_RUN_LIMIT - 1, new FakeNpcComposition("New boss", FIGHTABLE));
 
 		scan(table);
 
@@ -193,8 +175,8 @@ public class NpcNameIndexTest
 	public void scanStopsAfterAnEmptyRunPastTheKnownMaximum()
 	{
 		Map<Integer, NPCComposition> table = new HashMap<>();
-		table.put(NpcNameIndex.KNOWN_MAX_ID, definition("Near", FIGHTABLE));
-		table.put(NpcNameIndex.KNOWN_MAX_ID + NpcNameIndex.EMPTY_RUN_LIMIT + 5, definition("Too far", FIGHTABLE));
+		table.put(NpcNameIndex.KNOWN_MAX_ID, new FakeNpcComposition("Near", FIGHTABLE));
+		table.put(NpcNameIndex.KNOWN_MAX_ID + NpcNameIndex.EMPTY_RUN_LIMIT + 5, new FakeNpcComposition("Too far", FIGHTABLE));
 
 		scan(table);
 
@@ -216,7 +198,7 @@ public class NpcNameIndexTest
 				{
 					throw new IllegalStateException("no such npc");
 				}
-				return id == 4 ? definition("Imp", FIGHTABLE) : null;
+				return id == 4 ? new FakeNpcComposition("Imp", FIGHTABLE) : null;
 			});
 		}
 		while (!done);
@@ -245,7 +227,7 @@ public class NpcNameIndexTest
 		index.setSeedNames(sorted("Seed only"));
 		index.cancel();
 
-		assertTrue(index.step(id -> definition("Goblin", FIGHTABLE)));
+		assertTrue(index.step(id -> new FakeNpcComposition("Goblin", FIGHTABLE)));
 
 		assertFalse(index.isComplete());
 		assertEquals(Collections.singletonList("Seed only"), suggest("seed"));
