@@ -64,13 +64,18 @@ disappears when the NPC is revealed, forgotten or despawns.
 Three sources feed the per-chunk NPC lists and totals, and a chunk's total
 is the largest of them:
 
-- A bundled seed of every attackable NPC spawn (`spawns.csv.gz`, from the
-  community cache dump at mejrs/data_osrs, regenerated with
-  `python tools/generate_spawns.py`). A weekly job in this repository
-  regenerates the seed and the boss list, and the plugin fetches the latest
-  copies from GitHub once a week, so new content shows up without waiting
-  for a release. The fetched files are cached in `~/.runelite/npc-permadeath`.
-- The OSRS Wiki's location tables, which also supply the place names.
+- A bundled seed of every attackable NPC spawn (`spawns.csv.gz`), built by
+  `python tools/generate_spawns.py` from two sources merged together: the
+  OSRS Wiki's location tables (every `LocLine` that gives a combat level;
+  they are current and cover newer content such as Varlamore and Sailing)
+  and the community cache dump at mejrs/data_osrs (older, but it carries the
+  real NPC ids). A spawn found in both is counted once. A weekly job in this
+  repository regenerates the seed and the boss list, and the plugin fetches
+  the latest copies from GitHub once a week, so new content shows up without
+  waiting for a release. The fetched files are cached in
+  `~/.runelite/npc-permadeath`.
+- The OSRS Wiki's location tables, read for each NPC when you first meet it,
+  which also supply the place names.
 - Spawn tiles you observe yourself. When an NPC you saw die reappears with
   the same server index close to you, without you having teleported, the
   tile it appears on is its spawn point. These are saved on your machine
