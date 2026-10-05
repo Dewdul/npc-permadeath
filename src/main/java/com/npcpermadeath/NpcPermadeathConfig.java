@@ -14,6 +14,8 @@ public interface NpcPermadeathConfig extends Config
 	String KEY_GHOSTS = "ghosts";
 	String KEY_GHOST_OPACITY = "ghostOpacity";
 	String KEY_GHOST_TINT = "ghostTint";
+	String KEY_NPC_NAMES = "npcNames";
+	String KEY_IGNORED_NAMES = "ignoredNames";
 
 	@ConfigSection(
 		name = "Which NPCs count",
@@ -78,9 +80,9 @@ public interface NpcPermadeathConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "npcNames",
+		keyName = KEY_NPC_NAMES,
 		name = "Only these NPCs",
-		description = "Comma-separated NPC names this applies to (wildcards * allowed). Leave blank for every NPC.",
+		description = "Comma-separated NPC names this applies to (wildcards * allowed). Leave blank for every NPC. The plugin panel edits this list with name suggestions.",
 		section = whichSection,
 		position = 15
 	)
@@ -90,9 +92,9 @@ public interface NpcPermadeathConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "ignoredNames",
+		keyName = KEY_IGNORED_NAMES,
 		name = "Never these NPCs",
-		description = "Comma-separated NPC names that always respawn as normal (wildcards * allowed).",
+		description = "Comma-separated NPC names that always respawn as normal (wildcards * allowed). The plugin panel edits this list with name suggestions.",
 		section = whichSection,
 		position = 16
 	)
