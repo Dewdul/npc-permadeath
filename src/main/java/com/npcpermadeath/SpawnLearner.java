@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -19,7 +20,9 @@ import lombok.Value;
 
 /**
  * Everything known about where NPCs spawn, indexed by map chunk: a bundled
- * seed (the community spawn dump) plus tiles this client observed itself.
+ * seed (the OSRS Wiki's location tables merged with the community spawn
+ * dump) plus tiles this client observed itself. A spawn is identified by
+ * name (any case) and position alone, so the sources can overlap freely.
  *
  * <p>Observing works by watching NPCs respawn: when an NPC we saw die
  * reappears with the same index close to the player, without the player
@@ -77,11 +80,40 @@ class SpawnLearner
 		int tick;
 	}
 
+	/**
+	 * What makes a spawn the same spawn for counting: the lower-cased name and
+	 * the position, never the NPC id. The seed's wiki-sourced tiles carry id 0
+	 * while the same tile observed in game carries the real id; both are one
+	 * spawn.
+	 */
+	@Value
+	private static class TileKey
+	{
+		String lowerName;
+		int x;
+		int y;
+		int plane;
+	}
+
+	/** Spelling rank: names the game reported beat the dump's, which beat the wiki's. */
+	private static final int RANK_WIKI = 0;
+	private static final int RANK_DUMP = 1;
+	private static final int RANK_GAME = 2;
+
+	@Value
+	private static class Spelling
+	{
+		String name;
+		int rank;
+	}
+
 	private final Map<Integer, Dead> awaitingRespawn = new HashMap<>();
 	/** Tiles this client observed itself. */
 	private final Set<SpawnTile> learned = new HashSet<>();
-	/** region -> NPC name -> every known spawn tile, from all sources. */
-	private final Map<Integer, Map<String, Set<SpawnTile>>> index = new HashMap<>();
+	/** region -> lower-cased NPC name -> every known spawn tile, from all sources. */
+	private final Map<Integer, Map<String, Set<TileKey>>> index = new HashMap<>();
+	/** lower-cased NPC name -> the spelling shown to the user. */
+	private final Map<String, Spelling> spellings = new HashMap<>();
 	private int seedCount;
 	private boolean dirty;
 
@@ -99,7 +131,7 @@ class SpawnLearner
 					continue;
 				}
 				SpawnTile tile = SpawnTile.parse(line);
-				if (tile != null && addToIndex(tile))
+				if (tile != null && addToIndex(tile, tile.getNpcId() == 0 ? RANK_WIKI : RANK_DUMP))
 				{
 					seedCount++;
 				}
@@ -107,11 +139,25 @@ class SpawnLearner
 		}
 	}
 
-	private boolean addToIndex(SpawnTile tile)
+	private static String lower(String name)
 	{
+		return name.toLowerCase(Locale.ROOT);
+	}
+
+	/** @return whether the tile was not known yet, ignoring its NPC id and the case of its name */
+	private boolean addToIndex(SpawnTile tile, int rank)
+	{
+		String key = lower(tile.getName());
+		Spelling known = spellings.get(key);
+		// Ties go to the smaller spelling so the result does not depend on load order.
+		if (known == null || rank > known.getRank()
+			|| (rank == known.getRank() && tile.getName().compareTo(known.getName()) < 0))
+		{
+			spellings.put(key, new Spelling(tile.getName(), rank));
+		}
 		return index.computeIfAbsent(tile.region(), r -> new HashMap<>())
-			.computeIfAbsent(tile.getName(), n -> new HashSet<>())
-			.add(tile);
+			.computeIfAbsent(key, n -> new HashSet<>())
+			.add(new TileKey(key, tile.getX(), tile.getY(), tile.getPlane()));
 	}
 
 	void noteDeath(int index, int npcId, String name, int tick)
@@ -135,37 +181,51 @@ class SpawnLearner
 		{
 			return null;
 		}
-		addToIndex(tile);
+		addToIndex(tile, RANK_GAME);
 		dirty = true;
 		return tile;
 	}
 
-	/** Distinct known spawn tiles of the NPC in the chunk, seed and observed. */
+	/**
+	 * Distinct known spawn tiles of the NPC in the chunk, seed and observed.
+	 * A tile counts once however many sources know it, whatever NPC id they
+	 * give it, and the name is matched without regard to case.
+	 */
 	int countInRegion(String name, int region)
 	{
-		Map<String, Set<SpawnTile>> byName = index.get(region);
+		Map<String, Set<TileKey>> byName = index.get(region);
 		if (byName == null)
 		{
 			return 0;
 		}
-		Set<SpawnTile> tiles = byName.get(name);
+		Set<TileKey> tiles = byName.get(lower(name));
 		return tiles == null ? 0 : tiles.size();
 	}
 
-	/** Every NPC type known to spawn in the chunk, sorted. */
+	/** Every NPC type known to spawn in the chunk, sorted, spelled as the user should see it. */
 	Set<String> namesInRegion(int region)
 	{
-		Map<String, Set<SpawnTile>> byName = index.get(region);
-		return byName == null ? Collections.emptySet() : new TreeSet<>(byName.keySet());
+		Map<String, Set<TileKey>> byName = index.get(region);
+		return byName == null ? Collections.emptySet() : displayNames(byName.keySet());
 	}
 
-	/** Every distinct NPC name known to spawn anywhere, sorted. */
+	/** Every distinct NPC name known to spawn anywhere, sorted, spelled as the user should see it. */
 	Set<String> allNames()
 	{
 		Set<String> names = new TreeSet<>();
-		for (Map<String, Set<SpawnTile>> byName : index.values())
+		for (Map<String, Set<TileKey>> byName : index.values())
 		{
-			names.addAll(byName.keySet());
+			names.addAll(displayNames(byName.keySet()));
+		}
+		return names;
+	}
+
+	private Set<String> displayNames(Collection<String> lowerNames)
+	{
+		Set<String> names = new TreeSet<>();
+		for (String key : lowerNames)
+		{
+			names.add(spellings.get(key).getName());
 		}
 		return names;
 	}
@@ -221,7 +281,7 @@ class SpawnLearner
 			SpawnTile t = SpawnTile.parse(e);
 			if (t != null && learned.add(t))
 			{
-				addToIndex(t);
+				addToIndex(t, RANK_GAME);
 			}
 		}
 		dirty = false;

@@ -904,8 +904,10 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private List<PermadeathPanel.Row> rowsFor(int region)
 	{
 		Set<String> names = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-		names.addAll(learner.namesInRegion(region));
+		// Killed names first: the set keeps the first spelling of names that differ
+		// only in case, and kills are filed under the name the game reported.
 		names.addAll(tracker.killsInRegion(region).keySet());
+		names.addAll(learner.namesInRegion(region));
 		List<PermadeathPanel.Row> rows = new ArrayList<>();
 		for (String name : names)
 		{
@@ -928,7 +930,15 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		for (String name : learner.namesInRegion(region))
 		{
 			Integer total = spawnTotal(new AreaKey(name, region));
-			if (total == null || kills.getOrDefault(name, 0) < total)
+			int killed = 0;
+			for (Map.Entry<String, Integer> kill : kills.entrySet())
+			{
+				if (kill.getKey().equalsIgnoreCase(name))
+				{
+					killed += kill.getValue();
+				}
+			}
+			if (total == null || killed < total)
 			{
 				return ChunkMapOverlay.State.SOME;
 			}

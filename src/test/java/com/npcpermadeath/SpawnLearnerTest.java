@@ -103,6 +103,104 @@ public class SpawnLearnerTest
 	}
 
 	@Test
+	public void sameTileWithDifferentIdsCountsOnce() throws IOException
+	{
+		// A wiki-only tile (id 0) that the player later sees in game with its real id.
+		learner.loadSeed(new ByteArrayInputStream(gzip("Goblin|0|3245|3245|0\nGoblin|0|3250|3230|0\n")));
+		learner.noteDeath(7, GOBLIN, "Goblin", 100);
+		SpawnTile tile = learner.noteSpawn(7, GOBLIN, "Goblin", 3245, 3245, 0, 130, true);
+
+		assertNotNull(tile);
+		assertEquals(2, learner.countInRegion("Goblin", LUMBRIDGE));
+		// The persisted tile keeps the real id.
+		assertEquals(Collections.singletonList("Goblin|3029|3245|3245|0"), learner.serializeLearned());
+	}
+
+	@Test
+	public void sameTileFromTheDumpAndTheWikiCountsOnce() throws IOException
+	{
+		learner.loadSeed(new ByteArrayInputStream(gzip("Goblin|3029|3245|3245|0\nGoblin|0|3245|3245|0\n")));
+
+		assertEquals(1, learner.countInRegion("Goblin", LUMBRIDGE));
+		assertEquals(1, learner.seedCount());
+	}
+
+	@Test
+	public void sameNameOnAnotherPlaneOrTileCountsSeparately() throws IOException
+	{
+		learner.loadSeed(new ByteArrayInputStream(gzip("Goblin|0|3245|3245|0\nGoblin|0|3245|3245|1\nGoblin|0|3246|3245|0\n")));
+
+		assertEquals(3, learner.countInRegion("Goblin", LUMBRIDGE));
+	}
+
+	@Test
+	public void loadOrderOfSeedAndLearnedTilesDoesNotChangeTheCount() throws IOException
+	{
+		String seed = "Goblin|0|3245|3245|0\nGoblin|3029|3250|3230|0\nGoblin|0|3255|3255|0\n";
+		// The first two learned tiles are also in the seed; the third is new.
+		java.util.List<String> learnedTiles = Arrays.asList("Goblin|3029|3245|3245|0", "Goblin|0|3250|3230|0",
+			"Goblin|3029|3240|3240|0");
+
+		SpawnLearner seedFirst = new SpawnLearner();
+		seedFirst.loadSeed(new ByteArrayInputStream(gzip(seed)));
+		seedFirst.load(learnedTiles);
+
+		SpawnLearner learnedFirst = new SpawnLearner();
+		learnedFirst.load(learnedTiles);
+		learnedFirst.loadSeed(new ByteArrayInputStream(gzip(seed)));
+
+		assertEquals(4, seedFirst.countInRegion("Goblin", LUMBRIDGE));
+		assertEquals(4, learnedFirst.countInRegion("Goblin", LUMBRIDGE));
+		assertEquals(seedFirst.namesInRegion(LUMBRIDGE), learnedFirst.namesInRegion(LUMBRIDGE));
+		assertEquals(3, seedFirst.learnedCount());
+		assertEquals(3, learnedFirst.learnedCount());
+	}
+
+	@Test
+	public void loadingTheSeedAgainAddsNothing() throws IOException
+	{
+		byte[] seed = gzip("Goblin|3029|3245|3245|0\nRat|0|3210|3210|0\n");
+		learner.loadSeed(new ByteArrayInputStream(seed));
+		learner.loadSeed(new ByteArrayInputStream(seed));
+
+		assertEquals(2, learner.seedCount());
+		assertEquals(1, learner.countInRegion("Goblin", LUMBRIDGE));
+	}
+
+	@Test
+	public void namesMatchWithoutRegardToCase() throws IOException
+	{
+		learner.loadSeed(new ByteArrayInputStream(gzip(
+			"Frost dragon|0|3245|3245|0\nFrost Dragon|0|3246|3245|0\nFrost dragon|0|3247|3245|0\n")));
+
+		assertEquals(3, learner.countInRegion("Frost dragon", LUMBRIDGE));
+		assertEquals(3, learner.countInRegion("FROST DRAGON", LUMBRIDGE));
+		assertEquals(1, learner.namesInRegion(LUMBRIDGE).size());
+		assertEquals(Collections.singleton("Frost Dragon"), learner.allNames());
+	}
+
+	@Test
+	public void displayNamePrefersTheDumpThenTheGame() throws IOException
+	{
+		// The wiki spells it one way, the dump (with a real id) another.
+		learner.loadSeed(new ByteArrayInputStream(gzip(
+			"Frost Dragon|0|3245|3245|0\nFrost dragon|10|3246|3245|0\nFrost Dragon|0|3247|3245|0\n")));
+		assertEquals(Collections.singleton("Frost dragon"), learner.namesInRegion(LUMBRIDGE));
+		assertEquals(Collections.singleton("Frost dragon"), learner.allNames());
+
+		// Load order does not matter.
+		SpawnLearner reversed = new SpawnLearner();
+		reversed.loadSeed(new ByteArrayInputStream(gzip("Frost dragon|10|3246|3245|0\nFrost Dragon|0|3245|3245|0\n")));
+		assertEquals(Collections.singleton("Frost dragon"), reversed.namesInRegion(LUMBRIDGE));
+
+		// What the game itself reports wins over both.
+		learner.noteDeath(7, 10, "FROST DRAGON", 100);
+		learner.noteSpawn(7, 10, "FROST DRAGON", 3250, 3250, 0, 130, true);
+		assertEquals(Collections.singleton("FROST DRAGON"), learner.namesInRegion(LUMBRIDGE));
+		assertEquals(4, learner.countInRegion("Frost dragon", LUMBRIDGE));
+	}
+
+	@Test
 	public void stateRoundTripsThroughText()
 	{
 		learner.noteDeath(7, GOBLIN, "Goblin", 100);
