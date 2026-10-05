@@ -323,8 +323,12 @@ def wiki_spawns(pages, stats):
     """Returns {(lower name, x, y, plane): display name} from every page's LocLines."""
     tiles = {}
     for title in sorted(pages):
-        # Subpages such as "Splashing/Guide" are strategy guides, not NPCs.
-        default_name = None if "/" in title else monster_name(title)
+        # Subpages such as "Splashing/Guide" are strategy guides, not monster
+        # pages; their tables are not maintained as spawn data, so skip them.
+        if "/" in title:
+            stats["subpages"] = stats.get("subpages", 0) + 1
+            continue
+        default_name = monster_name(title)
         for named, positional in locline_templates(pages[title]):
             stats["locline"] += 1
             if not LEVEL_NUMBER.search(named.get("levels", "")):
