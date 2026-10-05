@@ -3,8 +3,11 @@ package com.npcpermadeath;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +20,9 @@ import net.runelite.client.util.Text;
  * list covers the whole game and stays current without a plugin update.
  *
  * <p>Until the scan finishes, the names from the bundled spawn data are
- * offered instead. {@link #step} runs on the client thread; {@link #suggest}
- * may be called from any thread.
+ * offered instead, together with the extra names (see {@link #setExtraNames}).
+ * {@link #step} runs on the client thread; {@link #suggest} may be called from
+ * any thread.
  *
  * <p>Multi-form NPCs need no special handling: each form is an NPC id of its
  * own, so every form is visited and judged by its own name and actions.
@@ -52,12 +56,24 @@ class NpcNameIndex
 		}
 	}
 
-	private volatile Names seed = Names.NONE;
+	/** The seed and extra names together, offered until the scan has finished. */
+	private volatile Names beforeScan = Names.NONE;
+	/** The scanned names plus the extras that exist as NPCs; null until the scan has finished. */
 	private volatile Names built;
 	private volatile boolean cancelled;
 
+	// Inputs behind the published lists; guarded by lock, since they are set from any thread.
+	private final Object lock = new Object();
+	private List<String> seedNames = Collections.emptyList();
+	private List<String> extraNames = Collections.emptyList();
+	/** The attackable names of the finished scan by lower case, or null while it is unfinished. */
+	private Map<String, String> scannedNames;
+	/** The lower-cased name of every definition the finished scan visited, or null. */
+	private Set<String> seenNames;
+
 	// Scan state, touched by the client thread only.
 	private final TreeMap<String, String> found = new TreeMap<>();
+	private final Set<String> seen = new HashSet<>();
 	private int nextId;
 	private int emptyRun;
 	private boolean scanDone;
@@ -65,12 +81,55 @@ class NpcNameIndex
 	/** Names to offer until the scan has finished. */
 	void setSeedNames(Collection<String> names)
 	{
-		TreeMap<String, String> byLowerCase = new TreeMap<>();
+		synchronized (lock)
+		{
+			seedNames = new ArrayList<>(names);
+			publish();
+		}
+	}
+
+	/**
+	 * Names that are always on offer, such as boss names that have no static spawn
+	 * and may lack an Attack action. Before the scan has finished they are all
+	 * offered; afterwards only those that some NPC definition actually carries.
+	 * Replaces any earlier extras.
+	 */
+	void setExtraNames(Collection<String> names)
+	{
+		synchronized (lock)
+		{
+			extraNames = new ArrayList<>(names);
+			publish();
+		}
+	}
+
+	/** Rebuilds the published lists from the inputs. Call with the lock held. */
+	private void publish()
+	{
+		TreeMap<String, String> pre = new TreeMap<>();
+		addAll(pre, seedNames);
+		addAll(pre, extraNames);
+		beforeScan = new Names(pre);
+		if (scannedNames != null)
+		{
+			TreeMap<String, String> after = new TreeMap<>(scannedNames);
+			for (String extra : extraNames)
+			{
+				if (seenNames.contains(extra.toLowerCase(Locale.ROOT)))
+				{
+					after.putIfAbsent(extra.toLowerCase(Locale.ROOT), extra);
+				}
+			}
+			built = new Names(after);
+		}
+	}
+
+	private static void addAll(TreeMap<String, String> byLowerCase, Collection<String> names)
+	{
 		for (String name : names)
 		{
 			byLowerCase.putIfAbsent(name.toLowerCase(Locale.ROOT), name);
 		}
-		seed = new Names(byLowerCase);
 	}
 
 	/** Stops the scan at the next slice. */
@@ -138,9 +197,11 @@ class NpcNameIndex
 			return;
 		}
 		emptyRun = 0;
+		String lower = name.toLowerCase(Locale.ROOT);
+		seen.add(lower);
 		if (hasAttack(definition.getActions()))
 		{
-			found.putIfAbsent(name.toLowerCase(Locale.ROOT), name);
+			found.putIfAbsent(lower, name);
 		}
 	}
 
@@ -149,9 +210,14 @@ class NpcNameIndex
 		scanDone = true;
 		if (!found.isEmpty())
 		{
-			built = new Names(found);
+			synchronized (lock)
+			{
+				scannedNames = Collections.unmodifiableMap(new TreeMap<>(found));
+				seenNames = Collections.unmodifiableSet(new HashSet<>(seen));
+				publish();
+			}
 		}
-		log.debug("Scanned {} NPC ids, {} attackable names", nextId, found.size());
+		log.debug("Scanned {} NPC ids, {} attackable names, {} names in all", nextId, found.size(), seen.size());
 	}
 
 	/** The display name with tags removed, or null for the blank and "null" placeholders. */
@@ -183,7 +249,7 @@ class NpcNameIndex
 	private Names current()
 	{
 		Names scanned = built;
-		return scanned != null ? scanned : seed;
+		return scanned != null ? scanned : beforeScan;
 	}
 
 	/** Up to limit names matching what was typed, best matches first. See {@link #rank}. */

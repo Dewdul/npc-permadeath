@@ -10,8 +10,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -139,7 +139,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	/** Map chunk the player is standing in, for the panel. */
 	private int currentRegion = -1;
 
-	private Set<String> bosses = new HashSet<>();
+	/** Boss names, bundled plus refreshed: lower case (for eligibility) to display case (for suggestions). */
+	private Map<String, String> bossNames = new LinkedHashMap<>();
 	private volatile List<String> nameFilter = new ArrayList<>();
 	private volatile List<String> ignoredNames = new ArrayList<>();
 	private NpcNameIndex nameIndex;
@@ -157,7 +158,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	@Override
 	protected void startUp()
 	{
-		bosses = loadBosses(getClass().getResourceAsStream("bosses.txt"));
+		bossNames = new LinkedHashMap<>();
+		addBosses(loadBosses(getClass().getResourceAsStream("bosses.txt")));
 		updater = new DataUpdater(okHttpClient, configManager, clientThread);
 		nameFilter = NameList.parse(config.npcNames());
 		ignoredNames = NameList.parse(config.ignoredNames());
@@ -167,6 +169,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		loadSeedSpawns();
 		learner.load(loadGlobalList(KEY_LEARNED));
 		nameIndex.setSeedNames(learner.allNames());
+		nameIndex.setExtraNames(bossNames.values());
 		clientThread.invoke(this::refreshData);
 		panel = new PermadeathPanel(
 			area -> clientThread.invoke(() -> forgetArea(area)),
@@ -1050,14 +1053,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		byte[] bossList = updater.cached("bosses.txt");
 		if (bossList != null)
 		{
-			bosses.addAll(loadBosses(new ByteArrayInputStream(bossList)));
+			addBosses(loadBosses(new ByteArrayInputStream(bossList)));
 		}
 		updater.refreshIfStale("spawns.csv.gz", now(), bytes ->
 		{
 			loadExtraSpawns(bytes);
 			refreshPanel();
 		});
-		updater.refreshIfStale("bosses.txt", now(), bytes -> bosses.addAll(loadBosses(new ByteArrayInputStream(bytes))));
+		updater.refreshIfStale("bosses.txt", now(), bytes -> addBosses(loadBosses(new ByteArrayInputStream(bytes))));
 	}
 
 	private void loadExtraSpawns(byte[] gzipped)
@@ -1192,7 +1195,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			return false;
 		}
-		if (!config.includeBosses() && bosses.contains(name.toLowerCase()))
+		if (!config.includeBosses() && bossNames.containsKey(name.toLowerCase()))
 		{
 			return false;
 		}
@@ -1250,9 +1253,24 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		return false;
 	}
 
-	private static Set<String> loadBosses(InputStream source)
+	/** Adds boss names to the eligibility set and offers them to the name type-ahead. */
+	private void addBosses(List<String> names)
 	{
-		Set<String> names = new HashSet<>();
+		for (String name : names)
+		{
+			bossNames.putIfAbsent(name.toLowerCase(), name);
+		}
+		NpcNameIndex index = nameIndex;
+		if (index != null)
+		{
+			index.setExtraNames(bossNames.values());
+		}
+	}
+
+	/** The boss names in a bosses.txt stream, in display case as written. */
+	private static List<String> loadBosses(InputStream source)
+	{
+		List<String> names = new ArrayList<>();
 		try (InputStream in = source)
 		{
 			if (in == null)
@@ -1267,7 +1285,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				line = line.trim();
 				if (!line.isEmpty() && !line.startsWith("#"))
 				{
-					names.add(line.toLowerCase());
+					names.add(line);
 				}
 			}
 		}

@@ -242,4 +242,157 @@ public class NpcNameIndexTest
 		assertFalse(index.isComplete());
 		assertEquals(sorted("Seed only"), suggest("seed"));
 	}
+
+	@Test
+	public void extraNamesAreSuggestedBeforeTheScanAlongsideTheSeed()
+	{
+		index.setSeedNames(sorted("Giant rat", "Goblin"));
+		index.setExtraNames(sorted("Zulrah", "Giant Mole"));
+
+		assertFalse(index.isComplete());
+		assertEquals(4, index.size());
+		assertEquals(sorted("Zulrah"), suggest("zul"));
+		assertEquals(sorted("Giant Mole", "Giant rat"), suggest("giant"));
+	}
+
+	@Test
+	public void extrasWorkWithoutAnySeed()
+	{
+		index.setExtraNames(sorted("Vorkath"));
+
+		assertEquals(sorted("Vorkath"), suggest("vork"));
+	}
+
+	@Test
+	public void afterTheScanAnExtraWithoutAnAttackActionIsStillSuggested()
+	{
+		index.setExtraNames(sorted("Kalphite Queen", "Callisto"));
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Kalphite Queen", PEACEFUL));
+		table.put(3, new FakeNpcComposition("<col=ff0000>Callisto</col>", new String[]{null, null, null, null, null}));
+		scan(table);
+
+		assertTrue(index.isComplete());
+		assertEquals(sorted("Kalphite Queen"), suggest("kalphite"));
+		assertEquals(sorted("Callisto"), suggest("calli"));
+		assertEquals(3, index.size());
+	}
+
+	@Test
+	public void afterTheScanAnExtraThatIsNoNpcIsNoLongerSuggested()
+	{
+		index.setSeedNames(sorted("Seed only"));
+		index.setExtraNames(sorted("Barrows", "Boss kill count", "Zulrah"));
+		assertEquals(sorted("Barrows"), suggest("barrows"));
+
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Zulrah", FIGHTABLE));
+		scan(table);
+
+		assertTrue(suggest("barrows").isEmpty());
+		assertTrue(suggest("kill count").isEmpty());
+		assertEquals(sorted("Zulrah"), suggest("zul"));
+		assertEquals(2, index.size());
+	}
+
+	@Test
+	public void extrasSetAfterTheScanFinishedAreFilteredByTheScan()
+	{
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Vorkath", PEACEFUL));
+		scan(table);
+		assertEquals(1, index.size());
+		assertTrue(suggest("vork").isEmpty());
+
+		index.setExtraNames(sorted("Vorkath", "Moons of Peril"));
+
+		assertEquals(sorted("Vorkath"), suggest("vork"));
+		assertTrue(suggest("moons").isEmpty());
+		assertEquals(2, index.size());
+	}
+
+	@Test
+	public void changingTheExtrasAfterTheScanReplacesTheEarlierOnes()
+	{
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Vorkath", PEACEFUL));
+		table.put(3, new FakeNpcComposition("Zulrah", PEACEFUL));
+		index.setExtraNames(sorted("Vorkath"));
+		scan(table);
+		assertEquals(sorted("Vorkath"), suggest("vork"));
+
+		index.setExtraNames(sorted("Zulrah"));
+
+		assertTrue(suggest("vork").isEmpty());
+		assertEquals(sorted("Zulrah"), suggest("zul"));
+	}
+
+	@Test
+	public void changingTheSeedAfterTheScanKeepsTheScannedNames()
+	{
+		index.setExtraNames(sorted("Vorkath"));
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Goblin", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Vorkath", PEACEFUL));
+		scan(table);
+
+		index.setSeedNames(sorted("Seed only"));
+
+		assertEquals(2, index.size());
+		assertTrue(suggest("seed").isEmpty());
+		assertEquals(sorted("Vorkath"), suggest("vork"));
+	}
+
+	@Test
+	public void extraNamesKeepTheirDisplayCase()
+	{
+		index.setExtraNames(sorted("Giant Mole", "TzTok-Jad"));
+		assertEquals(sorted("Giant Mole"), suggest("giant m"));
+		assertEquals(sorted("TzTok-Jad"), suggest("tztok"));
+
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("giant mole", PEACEFUL));
+		table.put(2, new FakeNpcComposition("Goblin", FIGHTABLE));
+		scan(table);
+
+		// The extra's spelling is used because no attackable definition supplied one.
+		assertEquals(sorted("Giant Mole"), suggest("giant m"));
+		assertTrue(suggest("tztok").isEmpty());
+	}
+
+	@Test
+	public void extrasAndScannedNamesAreMergedWithoutCase()
+	{
+		index.setSeedNames(sorted("goblin"));
+		index.setExtraNames(sorted("zulrah", "ZULRAH", "Goblin"));
+		assertEquals(2, index.size());
+
+		Map<Integer, NPCComposition> table = new HashMap<>();
+		table.put(1, new FakeNpcComposition("Zulrah", FIGHTABLE));
+		table.put(2, new FakeNpcComposition("Cow", FIGHTABLE));
+		scan(table);
+
+		assertEquals(2, index.size());
+		// Scanned spelling wins over the extra's.
+		assertEquals(sorted("Zulrah"), suggest("zul"));
+		assertEquals(sorted("Cow"), suggest("c"));
+		assertTrue(suggest("goblin").isEmpty());
+	}
+
+	@Test
+	public void aCancelledScanKeepsTheSeedAndExtras()
+	{
+		index.setSeedNames(sorted("Seed only"));
+		index.setExtraNames(sorted("Barrows"));
+		index.cancel();
+		assertTrue(index.step(id -> new FakeNpcComposition("Goblin", FIGHTABLE)));
+
+		assertFalse(index.isComplete());
+		assertEquals(sorted("Seed only"), suggest("seed"));
+		assertEquals(sorted("Barrows"), suggest("barrows"));
+	}
 }
