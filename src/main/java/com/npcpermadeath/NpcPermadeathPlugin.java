@@ -32,6 +32,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -40,6 +41,7 @@ import net.runelite.api.events.InteractingChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.ItemSpawned;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.NpcChanged;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.client.callback.ClientThread;
@@ -127,6 +129,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private final LootWatcher loot = new LootWatcher();
 	private final List<Decision> pendingDecisions = new ArrayList<>();
 	private final SpawnLearner learner = new SpawnLearner();
+	private GhostManager ghosts;
 	private SpawnTotals totals;
 	private DataUpdater updater;
 	private WorldPoint lastPlayerLocation;
@@ -177,6 +180,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		panelOverlay = new ChunkPanelOverlay(this, mapOverlay);
 		overlayManager.add(mapOverlay);
 		overlayManager.add(panelOverlay);
+		ghosts = new GhostManager(client, config);
 		renderCallbackManager.register(this);
 		clientThread.invoke(() ->
 		{
@@ -191,6 +195,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	protected void shutDown()
 	{
 		renderCallbackManager.unregister(this);
+		clientThread.invoke(ghosts::clear);
 		clientToolbar.removeNavigation(navButton);
 		overlayManager.remove(mapOverlay);
 		overlayManager.remove(panelOverlay);
@@ -251,6 +256,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	public void onNpcDespawned(NpcDespawned event)
 	{
 		NPC npc = event.getNpc();
+		ghosts.remove(npc);
 		if (!npc.isDead())
 		{
 			tracker.forget(npc.getIndex());
@@ -355,6 +361,14 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		learnSpawn(event.getNpc());
 		considerNpc(event.getNpc());
+		syncGhost(event.getNpc());
+	}
+
+	/** An NPC that changes form can stop (or start) being a hidden one, and its ghost needs the new model. */
+	@Subscribe
+	public void onNpcChanged(NpcChanged event)
+	{
+		syncGhost(event.getNpc());
 	}
 
 	/** If this is an NPC we saw die coming back, the tile it appears on is its spawn point. */
@@ -429,6 +443,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			return;
 		}
 		log.debug("Revealing {} (index {}) because it is attacking the player", area.getName(), npc.getIndex());
+		syncGhost(npc);
 		backfill(area);
 	}
 
@@ -446,6 +461,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				continue;
 			}
 			considerNpc(npc);
+			syncGhost(npc);
 		}
 	}
 
@@ -453,6 +469,31 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		Player local = client.getLocalPlayer();
 		return config.revealAttackers() && local != null && npc.getInteracting() == local;
+	}
+
+	// ---- ghosts ------------------------------------------------------------
+
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		ghosts.update();
+	}
+
+	private void syncGhost(NPC npc)
+	{
+		ghosts.sync(npc, tracker.isHidden(npc.getIndex(), npc.getId()));
+	}
+
+	/** Cheap re-check of every ghost against the tracker, for changes nothing announces. */
+	private void resyncGhosts()
+	{
+		ghosts.resync(client.getTopLevelWorldView().npcs(), npc -> tracker.isHidden(npc.getIndex(), npc.getId()));
+	}
+
+	/** Builds every ghost from scratch, after a setting or the set of slain NPCs changed. */
+	private void rebuildGhosts()
+	{
+		ghosts.rebuildAll(client.getTopLevelWorldView().npcs(), npc -> tracker.isHidden(npc.getIndex(), npc.getId()));
 	}
 
 	// ---- loot --------------------------------------------------------------
@@ -521,6 +562,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			tracker.prune(client.getTickCount(), now());
 			learner.prune(client.getTickCount());
+			resyncGhosts();
 		}
 		if (tickCounter % SAVE_INTERVAL_TICKS == 0)
 		{
@@ -544,6 +586,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				tracker.clearSession();
 				learner.clearSession();
 				loot.clear();
+				ghosts.clear();
 				pendingDecisions.clear();
 				currentWorld = -1;
 				lastPlayerLocation = null;
@@ -563,6 +606,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			currentWorld = world;
 			tracker.setCurrentWorld(world);
 			refreshPanel();
+			resyncGhosts();
 		}
 		if (!loaded)
 		{
@@ -590,6 +634,11 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 				break;
 			case "ignoredNames":
 				ignoredNames = parseNames(config.ignoredNames());
+				break;
+			case NpcPermadeathConfig.KEY_GHOSTS:
+			case NpcPermadeathConfig.KEY_GHOST_OPACITY:
+			case NpcPermadeathConfig.KEY_GHOST_TINT:
+				clientThread.invoke(this::rebuildGhosts);
 				break;
 			case NpcPermadeathConfig.KEY_FORGET_ALL:
 				if (config.forgetAll())
@@ -688,6 +737,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private void forgetArea(AreaKey area)
 	{
 		tracker.forgetArea(area);
+		rebuildGhosts();
 		saveState();
 		refreshPanel();
 		message("NPC Permadeath: " + area.getName() + " in " + chunkHeading(area) + " forgotten.");
@@ -1026,6 +1076,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	{
 		tracker.clearAll();
 		loot.clear();
+		rebuildGhosts();
 		saveState();
 		refreshPanel();
 		message("NPC Permadeath: all slain NPCs forgotten.");
@@ -1062,6 +1113,7 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		{
 			considerNpc(npc);
 		}
+		rebuildGhosts();
 	}
 
 	private void saveState()

@@ -4,12 +4,17 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.Range;
 
 @ConfigGroup(NpcPermadeathConfig.GROUP)
 public interface NpcPermadeathConfig extends Config
 {
 	String GROUP = "npcpermadeath";
 	String KEY_FORGET_ALL = "forgetAll";
+	String KEY_GHOSTS = "ghosts";
+	String KEY_GHOST_OPACITY = "ghostOpacity";
+	String KEY_GHOST_TINT = "ghostTint";
+
 	@ConfigSection(
 		name = "Which NPCs count",
 		description = "Choose which NPCs can be killed for good.",
@@ -128,6 +133,43 @@ public interface NpcPermadeathConfig extends Config
 		position = 23
 	)
 	default boolean announceKills()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = KEY_GHOSTS,
+		name = "Show slain NPCs as ghosts",
+		description = "Draw hidden NPCs as translucent ghosts instead of hiding them completely. Ghosts still cannot be clicked, attacked or looted.",
+		section = experienceSection,
+		position = 24
+	)
+	default boolean ghosts()
+	{
+		return false;
+	}
+
+	@Range(min = 10, max = 80)
+	@ConfigItem(
+		keyName = KEY_GHOST_OPACITY,
+		name = "Ghost opacity",
+		description = "How solid ghosts look, in percent. Higher is easier to see.",
+		section = experienceSection,
+		position = 25
+	)
+	default int ghostOpacity()
+	{
+		return 35;
+	}
+
+	@ConfigItem(
+		keyName = KEY_GHOST_TINT,
+		name = "Pale ghost colour",
+		description = "Recolour ghosts a pale spectral blue-white instead of the NPC's own colours.",
+		section = experienceSection,
+		position = 26
+	)
+	default boolean ghostTint()
 	{
 		return true;
 	}

@@ -43,6 +43,12 @@ Kills are credited to the chunk the NPC spawns in. One killed in a chunk it
 does not spawn in, or in a chunk whose spawns are all already dead, wandered
 in from next door, so it counts against the neighbouring chunk instead.
 
+With *Show slain NPCs as ghosts* on, a hidden NPC leaves a ghost behind: a
+translucent copy that walks, turns and animates along with the real NPC,
+which stays hidden underneath. The ghost is a separate client-side object
+with no menu entries, so it cannot be clicked, attacked or looted, and it
+disappears when the NPC is revealed, forgotten or despawns.
+
 ### Spawn data
 
 Three sources feed the per-chunk NPC lists and totals, and a chunk's total
@@ -80,6 +86,9 @@ is the largest of them:
 | Reveal NPCs attacking you | on | A hidden NPC that attacks you becomes visible so you can fight back, and another of its kind is hidden instead. |
 | Hide loot from hidden NPCs | on | Drops from a hidden NPC (killed by a cannon or area attacks) are invisible and cannot be picked up. Other items on the tile are unaffected. |
 | Announce kills in chat | on | Show the area tally after each kill. |
+| Show slain NPCs as ghosts | off | Hidden NPCs are drawn as translucent ghosts that follow the real NPC around instead of vanishing. Ghosts cannot be clicked, attacked or looted. |
+| Ghost opacity | 35 | How solid ghosts look, 10 to 80 percent. |
+| Pale ghost colour | on | Recolour ghosts a pale blue-white instead of the NPC's own colours. |
 
 *Forget all slain NPCs* brings everything back and unticks itself. Chat
 commands: `::permadeath` shows the tallies for the area you are standing in,
