@@ -239,11 +239,14 @@ class GhostManager
 				return null;
 			}
 		}
-		ModelData data = parts.length == 1 ? parts[0] : client.mergeModels(parts);
-		if (data == null)
+		ModelData merged = parts.length == 1 ? parts[0] : client.mergeModels(parts);
+		if (merged == null)
 		{
 			return null;
 		}
+		// Loaded model data shares its arrays with the game's own models, so
+		// take private copies of everything we are about to change first.
+		ModelData data = merged.shallowCopy().cloneColors();
 
 		short[] from = composition.getColorToReplace();
 		short[] to = composition.getColorToReplaceWith();
@@ -275,7 +278,6 @@ class GhostManager
 
 		if (key.isTint())
 		{
-			data.cloneColors();
 			short[] colours = data.getFaceColors();
 			if (colours != null)
 			{
