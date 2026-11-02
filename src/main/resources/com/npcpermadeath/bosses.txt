@@ -8,6 +8,7 @@ Akkha
 Alchemical Hydra
 Amoxliatl
 Araxxor
+Archive Guardian
 Arrg
 Artio
 Arzinian Avatar of Magic
@@ -23,6 +24,7 @@ Black golem
 Black Knight Titan
 Blood Moon
 Blue Moon
+Bork
 Boss
 Boss kill count
 Bouncer
@@ -48,6 +50,8 @@ Dagannoth mother
 Dagannoth Prime
 Dagannoth Rex
 Dagannoth Supreme
+Dagon'hai Elder
+Dagon'hai Monk
 Damis
 Dawn
 Delrith
@@ -57,6 +61,7 @@ Dessourt
 Dessous
 Dharok the Wretched
 Doom of Mokhaiotl
+Dreadnoth the Jellied
 Duke Sucellus
 Dusk
 Eclipse Moon
@@ -64,6 +69,7 @@ Eldric the Ice King
 Elidinis' Warden
 Elvarg
 Evil spirit
+Ezekiel
 Fareed
 Flambeed
 Gadderanks
@@ -102,6 +108,7 @@ Mad Angel
 Maggot King
 Me
 Melzar the Mad
+Moia
 Moons of Peril
 Moss Guardian
 Muttadile
@@ -109,6 +116,7 @@ Nex
 Nezikchened
 Nylocas Vasilias
 Obor
+Ocellus
 Penance Queen
 Pestilent Bloat
 Phantom Muspah
@@ -143,6 +151,7 @@ The Leviathan
 The Maiden of Sugadinti
 The Mimic
 The Nightmare
+The Smorks
 The Untouchable
 The Whisperer
 Thermonuclear smoke devil
@@ -168,6 +177,7 @@ Wintertodt
 Wrathmaw
 Xamphur
 Xarpus
+Xarth
 Yama
 Zalcano
 Zebak
