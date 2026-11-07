@@ -7,10 +7,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import net.runelite.cache.IndexType;
+import net.runelite.cache.WorldMapManager;
 import net.runelite.cache.definitions.MapSquareDefinition;
 import net.runelite.cache.definitions.WorldMapCompositeDefinition;
 import net.runelite.cache.definitions.WorldMapDefinition;
@@ -21,10 +24,12 @@ import net.runelite.cache.fs.Archive;
 import net.runelite.cache.fs.FSFile;
 import net.runelite.cache.fs.Index;
 import net.runelite.cache.fs.Store;
+import net.runelite.cache.region.Position;
 
 /**
  * Writes the plugin's world map area table: for every map in the game's world
- * map list, which world tiles it shows where.
+ * map list, which world tiles it shows where, and where on the surface each
+ * underground map is entered.
  *
  * <p>Each map is put together from 64x64 map squares and 8x8 zones, and each
  * piece is drawn at a display position that can differ from its real
@@ -32,11 +37,50 @@ import net.runelite.cache.fs.Store;
  * maps move pieces next to each other. The table records every 8x8 zone of
  * every map with its offset, merged into rectangles of equal offset.
  *
+ * <p>Entrances come from the world map's intermap links, the icons that switch
+ * between the surface and an underground map. A map without a link of its own
+ * to the surface is entered through the map it links to (Dorgesh-Kaan through
+ * the Lumbridge caves), up to {@link #MAX_HOPS} maps away.
+ *
  * <p>Usage: {@code WorldMapTable <cache dir> <output file> [source note]}
  */
 public final class WorldMapTable
 {
 	private static final int ZONE = 8;
+	private static final int MAX_HOPS = 3;
+
+	/** One map from the world map list. */
+	private static final class MapArea
+	{
+		final int id;
+		final String name;
+		final boolean surface;
+		/** {x, y, w, h, dx, dy}: map tiles and the offset to their world tiles. */
+		final List<int[]> rects;
+		/** {underground x, y, surface x, y}, world tiles. */
+		final Set<List<Integer>> exits = new LinkedHashSet<>();
+
+		MapArea(int id, String name, boolean surface, List<int[]> rects)
+		{
+			this.id = id;
+			this.name = name;
+			this.surface = surface;
+			this.rects = rects;
+		}
+
+		/** Whether the map shows this world tile. */
+		boolean shows(int x, int y)
+		{
+			for (int[] r : rects)
+			{
+				if (x >= r[0] + r[4] && x < r[0] + r[4] + r[2] && y >= r[1] + r[5] && y < r[1] + r[5] + r[3])
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+	}
 
 	private WorldMapTable()
 	{
@@ -66,37 +110,148 @@ public final class WorldMapTable
 				composites.put(f.getFileId(), loader.load(f.getContents()));
 			}
 
+			List<MapArea> areas = new ArrayList<>();
+			for (Map.Entry<Integer, WorldMapCompositeDefinition> e : composites.entrySet())
+			{
+				WorldMapDefinition def = details.get(e.getKey());
+				if (def == null || def.getName() == null)
+				{
+					continue;
+				}
+				List<int[]> rects = rectangles(def.getName(), e.getValue());
+				if (!rects.isEmpty())
+				{
+					areas.add(new MapArea(e.getKey(), def.getName().trim(), def.isSurface(), rects));
+				}
+			}
+
+			WorldMapManager links = new WorldMapManager(store);
+			links.load();
+			addExits(areas, links.getIntermapLinks());
+
 			File out = new File(args[1]);
-			int areas = 0;
 			int pieces = 0;
+			int exits = 0;
 			try (PrintWriter w = new PrintWriter(out, StandardCharsets.UTF_8.name()))
 			{
 				w.print("# World map areas for NPC Permadeath, written by tools/worldmap from " + source + ".\n");
 				w.print("# Do not edit by hand. \"area <id> <surface 0|1> <name>\" starts a map from the game's\n");
 				w.print("# world map list. Each line after it is a piece of that map, in game tiles:\n");
 				w.print("# x y width height dx dy. Map position (x, y) shows world tile (x + dx, y + dy).\n");
-				for (Map.Entry<Integer, WorldMapCompositeDefinition> e : composites.entrySet())
+				w.print("# \"exit x y sx sy\": world tile (x, y) of this map is entered from surface tile (sx, sy).\n");
+				for (MapArea a : areas)
 				{
-					WorldMapDefinition def = details.get(e.getKey());
-					if (def == null || def.getName() == null)
-					{
-						continue;
-					}
-					List<int[]> rects = rectangles(def.getName(), e.getValue());
-					if (rects.isEmpty())
-					{
-						continue;
-					}
-					w.print("area " + e.getKey() + " " + (def.isSurface() ? 1 : 0) + " " + def.getName().trim() + "\n");
-					for (int[] r : rects)
+					w.print("area " + a.id + " " + (a.surface ? 1 : 0) + " " + a.name + "\n");
+					for (int[] r : a.rects)
 					{
 						w.print(r[0] + " " + r[1] + " " + r[2] + " " + r[3] + " " + r[4] + " " + r[5] + "\n");
 					}
-					areas++;
-					pieces += rects.size();
+					for (List<Integer> x : a.exits)
+					{
+						w.print("exit " + x.get(0) + " " + x.get(1) + " " + x.get(2) + " " + x.get(3) + "\n");
+					}
+					pieces += a.rects.size();
+					exits += a.exits.size();
 				}
 			}
-			System.out.println("Wrote " + areas + " map areas, " + pieces + " pieces, to " + out);
+			System.out.println("Wrote " + areas.size() + " map areas, " + pieces + " pieces and " + exits
+				+ " surface entrances to " + out);
+			for (MapArea a : areas)
+			{
+				if (!a.surface && a.exits.isEmpty())
+				{
+					System.out.println("  no surface entrance known: " + a.name);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Gives each underground map its surface entrances: its own links to the
+	 * surface (either direction), else, through a link to another underground
+	 * map, that map's entrance nearest the link.
+	 */
+	static void addExits(List<MapArea> areas, Map<Position, Position> links)
+	{
+		MapArea surface = areas.stream().filter(a -> a.surface).findFirst().orElse(null);
+		if (surface == null)
+		{
+			return;
+		}
+		// {from x, y, to x, y, to area index} between two underground maps, both directions
+		Map<MapArea, List<int[]>> between = new HashMap<>();
+		for (Map.Entry<Position, Position> link : links.entrySet())
+		{
+			Position a = link.getKey();
+			Position b = link.getValue();
+			boolean aUp = surface.shows(a.getX(), a.getY());
+			boolean bUp = surface.shows(b.getX(), b.getY());
+			for (MapArea m : areas)
+			{
+				if (m.surface)
+				{
+					continue;
+				}
+				boolean hasA = m.shows(a.getX(), a.getY());
+				boolean hasB = m.shows(b.getX(), b.getY());
+				if (hasA && !aUp && bUp)
+				{
+					m.exits.add(List.of(a.getX(), a.getY(), b.getX(), b.getY()));
+				}
+				if (hasB && !bUp && aUp)
+				{
+					m.exits.add(List.of(b.getX(), b.getY(), a.getX(), a.getY()));
+				}
+				for (MapArea other : areas)
+				{
+					if (other == m || other.surface)
+					{
+						continue;
+					}
+					if (hasA && other.shows(b.getX(), b.getY()) && !aUp && !bUp)
+					{
+						between.computeIfAbsent(m, k -> new ArrayList<>())
+							.add(new int[]{a.getX(), a.getY(), b.getX(), b.getY(), areas.indexOf(other)});
+					}
+					if (hasB && other.shows(a.getX(), a.getY()) && !aUp && !bUp)
+					{
+						between.computeIfAbsent(m, k -> new ArrayList<>())
+							.add(new int[]{b.getX(), b.getY(), a.getX(), a.getY(), areas.indexOf(other)});
+					}
+				}
+			}
+		}
+		for (int hop = 0; hop < MAX_HOPS; hop++)
+		{
+			Map<MapArea, List<List<Integer>>> found = new HashMap<>();
+			for (MapArea m : areas)
+			{
+				if (m.surface || !m.exits.isEmpty())
+				{
+					continue;
+				}
+				for (int[] l : between.getOrDefault(m, List.of()))
+				{
+					MapArea next = areas.get(l[4]);
+					List<Integer> best = null;
+					long bestD = Long.MAX_VALUE;
+					for (List<Integer> x : next.exits)
+					{
+						long dx = x.get(0) - l[2];
+						long dy = x.get(1) - l[3];
+						if (dx * dx + dy * dy < bestD)
+						{
+							bestD = dx * dx + dy * dy;
+							best = x;
+						}
+					}
+					if (best != null)
+					{
+						found.computeIfAbsent(m, k -> new ArrayList<>()).add(List.of(l[0], l[1], best.get(2), best.get(3)));
+					}
+				}
+			}
+			found.forEach((m, xs) -> m.exits.addAll(xs));
 		}
 	}
 

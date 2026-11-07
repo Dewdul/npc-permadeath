@@ -230,6 +230,21 @@ class SpawnLearner
 		return names;
 	}
 
+	/** Every chunk the NPC is known to spawn in, matched without regard to case. */
+	Set<Integer> regionsWith(String name)
+	{
+		String key = lower(name);
+		Set<Integer> regions = new TreeSet<>();
+		index.forEach((region, byName) ->
+		{
+			if (byName.containsKey(key))
+			{
+				regions.add(region);
+			}
+		});
+		return regions;
+	}
+
 	boolean hasSpawns(int region)
 	{
 		return index.containsKey(region);

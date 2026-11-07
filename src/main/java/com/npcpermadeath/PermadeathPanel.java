@@ -4,14 +4,16 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -22,15 +24,22 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
 import lombok.Value;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 
-/** Sidebar list of everything slain, one section per map chunk. */
+/**
+ * Sidebar list of everything slain, one section per map chunk, or the
+ * results of an NPC search: every chunk the NPC is in. Clicking a chunk
+ * centres the world map on it.
+ */
 class PermadeathPanel extends PluginPanel
 {
 	/** How far along an NPC type is, in display order. */
@@ -70,21 +79,102 @@ class PermadeathPanel extends PluginPanel
 		}
 	}
 
+	/** One searched NPC type summed over every chunk found. */
+	@Value
+	static class Total
+	{
+		String name;
+		int kills;
+		/** Spawns in the chunks that have a count, or null if none has. */
+		Integer total;
+		int chunks;
+		/** Chunks with no spawn count, left out of {@link #total}. */
+		int chunksWithoutTotal;
+
+		Progress getProgress()
+		{
+			if (kills == 0)
+			{
+				return Progress.UNTOUCHED;
+			}
+			return total != null && chunksWithoutTotal == 0 && kills >= total ? Progress.CLEARED : Progress.STARTED;
+		}
+	}
+
+	/** What a search found. */
+	@Value
+	static class SearchResult
+	{
+		String query;
+		/** The NPC types listed, at most {@link NpcSearch#MAX_NAMES}. */
+		List<String> names;
+		/** Whether more NPC types matched than are listed. */
+		boolean moreNames;
+		/** Each listed type over every chunk found, even past {@link NpcSearch#MAX_ROWS}. */
+		List<Total> totals;
+		/** Distinct chunks found, even past {@link NpcSearch#MAX_ROWS}. */
+		int chunks;
+		/** In display order, at most {@link NpcSearch#MAX_ROWS}. */
+		List<Row> rows;
+		/** Whether more chunks matched than are listed. */
+		boolean moreRows;
+	}
+
+	/** The list under the header: as wide as the sidebar, as tall as its rows. */
+	private static class ListPanel extends JPanel implements Scrollable
+	{
+		@Override
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		@Override
+		public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction)
+		{
+			return 16;
+		}
+
+		@Override
+		public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction)
+		{
+			return Math.max(16, visible.height - 16);
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
+	}
+
 	private final Consumer<AreaKey> onForget;
 	private final Consumer<Integer> onShowOnMap;
 	private final JLabel summary = new JLabel();
-	private final JPanel list = new JPanel();
+	private final ListPanel list = new ListPanel();
+	private final JScrollPane scroll = new JScrollPane(list);
+	private final NpcSearchBox searchBox;
 	private final JLabel filterHeader = new JLabel();
 	private final JPanel filterBody = new JPanel(new GridBagLayout());
 	private final NameFilterEditor neverEditor;
 	private final NameFilterEditor onlyEditor;
+	/** The search last shown, or null while the kill list is shown. */
+	private String shownQuery;
 
 	/**
 	 * @param suggestNames NPC names matching some typed text, given the text and a limit
 	 * @param onFilterChanged called with the config key and the new comma-separated text when the user edits a name filter
+	 * @param onSearch called with the search text when the user searches, and with null when the search ends
 	 */
 	PermadeathPanel(Consumer<AreaKey> onForget, Runnable onOpenSettings, Consumer<Integer> onShowOnMap,
-		BiFunction<String, Integer, List<String>> suggestNames, BiConsumer<String, String> onFilterChanged)
+		BiFunction<String, Integer, List<String>> suggestNames, BiConsumer<String, String> onFilterChanged,
+		Consumer<String> onSearch)
 	{
 		super(false);
 		this.onForget = onForget;
@@ -110,6 +200,9 @@ class PermadeathPanel extends PluginPanel
 		summary.setFont(FontManager.getRunescapeSmallFont());
 		summary.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		header.add(summary, BorderLayout.SOUTH);
+
+		searchBox = new NpcSearchBox(suggestNames, onSearch);
+		searchBox.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
 
 		neverEditor = new NameFilterEditor("Never these NPCs", "Always respawn as normal. Pick a name or type one, "
 			+ "wildcards like Cow* work.", "None.", suggestNames, names ->
@@ -153,12 +246,18 @@ class PermadeathPanel extends PluginPanel
 		JPanel north = new JPanel(new BorderLayout());
 		north.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		north.add(header, BorderLayout.NORTH);
-		north.add(filters, BorderLayout.CENTER);
+		north.add(searchBox, BorderLayout.CENTER);
+		north.add(filters, BorderLayout.SOUTH);
 		add(north, BorderLayout.NORTH);
 
 		list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
 		list.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		add(list, BorderLayout.CENTER);
+		scroll.setBorder(BorderFactory.createEmptyBorder());
+		scroll.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		scroll.getViewport().setBackground(ColorScheme.DARK_GRAY_COLOR);
+		scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		scroll.getVerticalScrollBar().setUnitIncrement(16);
+		add(scroll, BorderLayout.CENTER);
 
 		update(Collections.emptyList());
 	}
@@ -178,19 +277,18 @@ class PermadeathPanel extends PluginPanel
 		filterHeader.setText((filterBody.isVisible() ? "v " : "> ") + "NPC filters" + counts);
 	}
 
-	/** Rebuilds the list. Must be called on the Swing thread. */
+	/** Shows the kill list. Must be called on the Swing thread. */
 	void update(List<Row> rows)
 	{
+		boolean wasSearch = shownQuery != null;
+		shownQuery = null;
 		list.removeAll();
 		int totalKills = rows.stream().mapToInt(Row::getKills).sum();
 		long chunks = rows.stream().filter(r -> r.getKills() > 0).map(r -> r.getArea().getRegion()).distinct().count();
 		if (rows.isEmpty())
 		{
 			summary.setText("Nothing slain yet.");
-			JLabel hint = new JLabel("<html>Kill something. Every kill keeps one more of its kind hidden in that chunk of the map.</html>");
-			hint.setFont(FontManager.getRunescapeSmallFont());
-			hint.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			list.add(hint);
+			list.add(hint("Kill something. Every kill keeps one more of its kind hidden in that chunk of the map."));
 		}
 		else
 		{
@@ -201,18 +299,95 @@ class PermadeathPanel extends PluginPanel
 			{
 				byChunk.computeIfAbsent(row.getHeading(), h -> new ArrayList<>()).add(row);
 			}
-			byChunk.forEach((heading, chunkRows) ->
-			{
-				list.add(chunkHeader(heading, chunkRows.get(0).getArea().getRegion()));
-				for (Row row : chunkRows)
-				{
-					list.add(rowPanel(row));
-				}
-				list.add(Box.createVerticalStrut(6));
-			});
+			addChunks(byChunk.values());
 		}
+		finish(wasSearch);
+	}
+
+	/** Shows what a search found. Must be called on the Swing thread. */
+	void showSearch(SearchResult result)
+	{
+		boolean newSearch = !result.getQuery().equals(shownQuery);
+		shownQuery = result.getQuery();
+		list.removeAll();
+		List<Row> rows = result.getRows();
+		if (rows.isEmpty())
+		{
+			summary.setText("<html>Nothing known about " + escape(result.getQuery()) + " yet.</html>");
+			list.add(hint("No spawns or kills of it are known. The spawn data covers NPCs that can be attacked; "
+				+ "the wiki is asked too, so try again in a moment."));
+		}
+		else
+		{
+			int chunks = result.getChunks();
+			String what = result.getNames().size() == 1
+				? escape(result.getNames().get(0))
+				: result.getNames().size() + " NPC types";
+			StringBuilder text = new StringBuilder("<html>").append(what).append(" in ")
+				.append(chunks).append(chunks == 1 ? " chunk" : " chunks")
+				.append(result.isMoreRows() ? " (first " + NpcSearch.MAX_ROWS + " listed)" : "")
+				.append(". Click one to see it on the world map.");
+			if (result.isMoreNames())
+			{
+				text.append(" Only the first ").append(NpcSearch.MAX_NAMES).append(" NPC types are listed.");
+			}
+			summary.setText(text.append("</html>").toString());
+			for (Total t : result.getTotals())
+			{
+				list.add(totalRow(t, result.getNames().size() == 1 ? "Total" : t.getName()));
+			}
+			list.add(Box.createVerticalStrut(6));
+			Map<Integer, List<Row>> byChunk = new LinkedHashMap<>();
+			for (Row row : rows)
+			{
+				byChunk.computeIfAbsent(row.getArea().getRegion(), r -> new ArrayList<>()).add(row);
+			}
+			addChunks(byChunk.values());
+		}
+		finish(newSearch);
+	}
+
+	/** The search being shown, or null while the kill list is shown. */
+	String getShownQuery()
+	{
+		return shownQuery;
+	}
+
+	private void addChunks(Collection<List<Row>> chunks)
+	{
+		for (List<Row> chunkRows : chunks)
+		{
+			list.add(chunkHeader(chunkRows.get(0).getHeading(), chunkRows.get(0).getArea().getRegion()));
+			for (Row row : chunkRows)
+			{
+				list.add(rowPanel(row));
+			}
+			list.add(Box.createVerticalStrut(6));
+		}
+	}
+
+	private void finish(boolean toTop)
+	{
 		list.revalidate();
 		list.repaint();
+		if (toTop)
+		{
+			scroll.getVerticalScrollBar().setValue(0);
+		}
+	}
+
+	private static JLabel hint(String text)
+	{
+		JLabel hint = new JLabel("<html>" + text + "</html>");
+		hint.setFont(FontManager.getRunescapeSmallFont());
+		hint.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		hint.setAlignmentX(LEFT_ALIGNMENT);
+		return hint;
+	}
+
+	private static String escape(String text)
+	{
+		return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 
 	private JLabel chunkHeader(String heading, int region)
@@ -222,7 +397,9 @@ class PermadeathPanel extends PluginPanel
 		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		label.setBorder(BorderFactory.createEmptyBorder(4, 0, 2, 0));
 		label.setAlignmentX(LEFT_ALIGNMENT);
-		label.setToolTipText("Click to centre the world map on this chunk");
+		// as wide as the list, so a long heading ends in "..." instead of running under the edge
+		label.setMaximumSize(new Dimension(Integer.MAX_VALUE, label.getPreferredSize().height));
+		label.setToolTipText(heading + ": click to centre the world map on this chunk");
 		label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		label.addMouseListener(new MouseAdapter()
 		{
@@ -252,8 +429,7 @@ class PermadeathPanel extends PluginPanel
 		JPanel panel = new JPanel(new GridBagLayout());
 		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		panel.setBorder(BorderFactory.createEmptyBorder(3, 6, 3, 3));
-		panel.setAlignmentX(LEFT_ALIGNMENT);
-		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		panel.setPreferredSize(new Dimension(0, 26));
 
 		GridBagConstraints c = new GridBagConstraints();
 		c.gridy = 0;
@@ -263,6 +439,8 @@ class PermadeathPanel extends PluginPanel
 		JLabel name = new JLabel(row.getArea().getName());
 		name.setFont(FontManager.getRunescapeSmallFont());
 		name.setForeground(row.getProgress() == Progress.UNTOUCHED ? ColorScheme.LIGHT_GRAY_COLOR : Color.WHITE);
+		// may shrink, ending in "...", so the count and button always fit
+		name.setMinimumSize(new Dimension(0, name.getPreferredSize().height));
 		c.gridx = 0;
 		c.weightx = 1;
 		c.fill = GridBagConstraints.HORIZONTAL;
@@ -293,13 +471,70 @@ class PermadeathPanel extends PluginPanel
 			c.insets = new Insets(0, 0, 0, 0);
 			panel.add(forget, c);
 		}
+		showOnMapWhenClicked(row.getArea().getRegion(), panel, name, count);
 
-		JPanel wrapper = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 1));
+		JPanel wrapper = new JPanel(new BorderLayout());
 		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapper.setBorder(BorderFactory.createEmptyBorder(1, 0, 1, 0));
 		wrapper.setAlignmentX(LEFT_ALIGNMENT);
-		wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-		panel.setPreferredSize(new Dimension(PANEL_WIDTH - 20, 26));
-		wrapper.add(panel);
+		wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		wrapper.add(panel, BorderLayout.CENTER);
 		return wrapper;
+	}
+
+	/** A searched NPC type's kills and spawns over every chunk, above the chunks. */
+	private static JPanel totalRow(Total t, String label)
+	{
+		JPanel panel = new JPanel(new BorderLayout(4, 0));
+		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		panel.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 2, 0, 0, t.getProgress().color),
+			BorderFactory.createEmptyBorder(4, 6, 4, 6)));
+
+		JLabel name = new JLabel(label);
+		name.setFont(FontManager.getRunescapeBoldFont());
+		name.setForeground(Color.WHITE);
+		name.setMinimumSize(new Dimension(0, name.getPreferredSize().height));
+		panel.add(name, BorderLayout.CENTER);
+
+		JLabel count = new JLabel(t.getTotal() == null ? t.getKills() + " slain" : t.getKills() + " / " + t.getTotal(),
+			SwingConstants.RIGHT);
+		count.setFont(FontManager.getRunescapeBoldFont());
+		count.setForeground(t.getProgress().color);
+		String tip = "Your kills and the known spawns across all " + t.getChunks()
+			+ (t.getChunks() == 1 ? " chunk" : " chunks");
+		if (t.getChunksWithoutTotal() > 0)
+		{
+			tip += "; " + t.getChunksWithoutTotal() + (t.getChunksWithoutTotal() == 1 ? " has" : " have")
+				+ " no spawn count yet";
+		}
+		count.setToolTipText(tip);
+		panel.add(count, BorderLayout.EAST);
+
+		JPanel wrapper = new JPanel(new BorderLayout());
+		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapper.setBorder(BorderFactory.createEmptyBorder(1, 0, 1, 0));
+		wrapper.setAlignmentX(LEFT_ALIGNMENT);
+		wrapper.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+		wrapper.add(panel, BorderLayout.CENTER);
+		return wrapper;
+	}
+
+	/** A click on the row (not its button) centres the world map on the chunk, like the heading. */
+	private void showOnMapWhenClicked(int region, JComponent... parts)
+	{
+		MouseAdapter click = new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				onShowOnMap.accept(region);
+			}
+		};
+		for (JComponent part : parts)
+		{
+			part.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			part.addMouseListener(click);
+		}
 	}
 }

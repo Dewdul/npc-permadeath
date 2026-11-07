@@ -30,7 +30,11 @@ public class MapAreasTest
 		+ "area 20 0 Taverley Underground\n"
 		// the same real chunk drawn in place and again 192 tiles south
 		+ "2880 9792 64 64 0 0\n"
-		+ "2880 9600 64 64 0 192\n";
+		+ "2880 9600 64 64 0 192\n"
+		// a ladder near the north edge of the chunk and a trapdoor near its south edge
+		+ "exit 2900 9850 2900 3450\n"
+		+ "exit 2900 9795 2884 3397\n"
+		+ "exit broken line\n";
 
 	private static MapAreas parse(String text) throws IOException
 	{
@@ -74,6 +78,20 @@ public class MapAreasTest
 		assertEquals(new Rectangle(2880, 9792, 64, 64), fp.partAt(2890, 9800));
 		assertNull(fp.partAt(2890, 9700));
 		assertNotNull(fp.centre());
+	}
+
+	@Test
+	public void theNearestWayInOnTheMapIsChosen() throws IOException
+	{
+		MapAreas areas = parse(TABLE);
+		MapAreas.MapArea taverley = areas.named("Taverley Underground");
+
+		// the chunk is drawn twice; its first part (in place) has its middle at
+		// (2912, 9824), 26 tiles from the ladder and 29 from the trapdoor
+		assertEquals(new Point(2900, 3450), taverley.entranceFor(MapAreas.regionOf(2900, 9800)));
+		assertEquals(new Point(2900, 9850), taverley.mapPositionOf(2900, 9850));
+		assertNull(taverley.mapPositionOf(3245, 3245));
+		assertNull(areas.named("Waterbirth Dungeon").entranceFor(MapAreas.regionOf(2950, 4600)));
 	}
 
 	@Test
@@ -125,6 +143,13 @@ public class MapAreasTest
 		assertTrue(lair.y > 9000);
 		assertEquals(dagannothKings, waterbirth.regionAt(lair.x + lair.width / 2, lair.y + lair.height / 2));
 		assertSame(areas.named("Taverley Underground"), areas.home(taverleyDragons));
+		// ways in from the surface: the kings from Waterbirth Island, Dorgesh-Kaan
+		// through the Lumbridge caves, which have no surface link of their own
+		Point island = waterbirth.entranceFor(dagannothKings);
+		assertTrue(String.valueOf(island), island.x > 2500 && island.x < 2560 && island.y > 3720 && island.y < 3760);
+		MapAreas.MapArea dorgesh = areas.named("Dorgesh-Kaan");
+		Point cellar = dorgesh.entranceFor(dorgesh.footprints().keySet().iterator().next());
+		assertTrue(String.valueOf(cellar), cellar.x > 3150 && cellar.x < 3260 && cellar.y > 3150 && cellar.y < 3260);
 		for (MapAreas.MapArea a : areas.getAreas())
 		{
 			assertFalse(a.getName(), a.getPieces().isEmpty());

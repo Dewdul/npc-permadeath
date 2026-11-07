@@ -103,6 +103,8 @@ final class MapAreas
 		private final String name;
 		private final boolean surface;
 		private final List<Piece> pieces = new ArrayList<>();
+		/** {x, y, surface x, surface y}: world tile (x, y) of this map is entered from that surface tile. */
+		private final List<int[]> exits = new ArrayList<>();
 		/** chunk (region id) -> where it is drawn; built on first use */
 		private Map<Integer, Footprint> footprints;
 
@@ -184,6 +186,49 @@ final class MapAreas
 		{
 			return footprints().containsKey(region);
 		}
+
+		/**
+		 * The surface tile this map is entered from that is nearest the chunk,
+		 * or null when no way in from the surface is known. Distances are
+		 * measured on the map, where a dungeon's pieces sit as they connect.
+		 */
+		Point entranceFor(int region)
+		{
+			Footprint fp = footprints().get(region);
+			Point from = fp != null ? fp.centre()
+				: new Point(((region >> 8) << 6) + CHUNK / 2, ((region & 0xff) << 6) + CHUNK / 2);
+			int[] best = null;
+			long bestD = Long.MAX_VALUE;
+			for (int[] exit : exits)
+			{
+				Point at = fp != null ? mapPositionOf(exit[0], exit[1]) : null;
+				if (at == null)
+				{
+					at = new Point(exit[0], exit[1]);
+				}
+				long dx = at.x - from.x;
+				long dy = at.y - from.y;
+				if (dx * dx + dy * dy < bestD)
+				{
+					bestD = dx * dx + dy * dy;
+					best = exit;
+				}
+			}
+			return best == null ? null : new Point(best[2], best[3]);
+		}
+
+		/** Where the map draws a world tile, or null when it does not show it. */
+		Point mapPositionOf(int x, int y)
+		{
+			for (Piece p : pieces)
+			{
+				if (p.contains(x - p.dx, y - p.dy))
+				{
+					return new Point(x - p.dx, y - p.dy);
+				}
+			}
+			return null;
+		}
 	}
 
 	private final List<MapArea> areas;
@@ -224,6 +269,11 @@ final class MapAreas
 					String name = line.split("\\s+", 4)[3];
 					current = new MapArea(Integer.parseInt(p[1]), name, p[2].equals("1"));
 					areas.add(current);
+				}
+				else if (current != null && p[0].equals("exit") && p.length == 5)
+				{
+					current.exits.add(new int[]{Integer.parseInt(p[1]), Integer.parseInt(p[2]),
+						Integer.parseInt(p[3]), Integer.parseInt(p[4])});
 				}
 				else if (current != null && p.length == 6)
 				{

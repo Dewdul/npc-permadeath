@@ -103,6 +103,17 @@ public class SpawnLearnerTest
 	}
 
 	@Test
+	public void findsEveryChunkANameSpawnsIn() throws IOException
+	{
+		learner.loadSeed(new ByteArrayInputStream(gzip(
+			"Skeleton|0|3245|3245|0\nSkeleton|0|3100|9900|0\nSkeleton mage|0|3000|3000|0\nGoblin|0|3245|3246|0\n")));
+
+		assertEquals(new java.util.TreeSet<>(Arrays.asList(LUMBRIDGE, ((3100 >> 6) << 8) | (9900 >> 6))),
+			learner.regionsWith("skeleton"));
+		assertTrue(learner.regionsWith("Nobody").isEmpty());
+	}
+
+	@Test
 	public void sameTileWithDifferentIdsCountsOnce() throws IOException
 	{
 		// A wiki-only tile (id 0) that the player later sees in game with its real id.

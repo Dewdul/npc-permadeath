@@ -32,8 +32,20 @@ The sidebar panel (tombstone icon) lists the chunk you are standing in and
 every chunk you have kills in, headed like `Lumbridge (3200, 3200)`. Each
 chunk lists every attackable NPC type known to spawn there, `0 / 12` until
 you start on them, with an `x` on rows with kills to forget those kills and
-bring the NPCs back. Click a heading to centre the world map on that chunk;
-the Settings button opens the plugin settings.
+bring the NPCs back. Click a chunk to centre the world map on it; the
+Settings button opens the plugin settings.
+
+**Find an NPC** at the top of the panel lists every chunk an NPC spawns in,
+with your kills and its spawns in each. A Total row at the top adds them
+all up, such as `12 / 340`. The chunks you have kills in come first. Pick a
+name from the suggestions or type one. A wildcard such as `Skeleton*` takes
+in every skeleton type, and part of a name finds every name containing it.
+Clear the box to go back to your kills.
+
+Clicking a chunk centres the world map on it. Plugins can't switch the world
+map to another map, so a dungeon chunk clicked while the surface map is open
+takes you to where that dungeon is entered from the surface. The ways in
+come from the world map's own dungeon links.
 
 The collapsible **NPC filters** section edits the two name lists from the
 settings table below, *Never these NPCs* first. Type in the box and a list of

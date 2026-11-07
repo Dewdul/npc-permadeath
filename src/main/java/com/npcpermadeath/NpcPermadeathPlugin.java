@@ -138,6 +138,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private ChunkPanelOverlay panelOverlay;
 	/** The world map's maps and where each draws the world. */
 	private MapAreas mapAreas = MapAreas.empty();
+	/** The panel's NPC search, or null while it shows the kill list. Written on the client thread. */
+	private volatile String searchQuery;
 	/** Map chunk the player is standing in, for the panel. */
 	private int currentRegion = -1;
 
@@ -178,7 +180,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			this::openSettings,
 			region -> clientThread.invoke(() -> showOnMap(region)),
 			nameIndex::suggest,
-			(key, csv) -> configManager.setConfiguration(NpcPermadeathConfig.GROUP, key, csv));
+			(key, csv) -> configManager.setConfiguration(NpcPermadeathConfig.GROUP, key, csv),
+			query -> clientThread.invoke(() -> search(query)));
 		refreshPanelFilters();
 		navButton = NavigationButton.builder()
 			.tooltip("NPC Permadeath")
@@ -773,8 +776,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	/**
 	 * Centres the world map on the chunk. An underground map may draw the
 	 * chunk away from its real tiles, so the map is moved to where it is
-	 * drawn. The client cannot switch maps for us, so a chunk on another map
-	 * than the open one gets a message naming the map to choose.
+	 * drawn. The client cannot switch maps for us, so for an underground chunk
+	 * seen from the surface the map goes to where that dungeon is entered.
 	 */
 	private void showOnMap(int region)
 	{
@@ -787,8 +790,9 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			client.getWorldMap().setWorldMapPositionTarget(new WorldPoint(at.x, at.y, 0));
 			return;
 		}
+		boolean onSurface = shown == null || shown.isSurface();
 		MapAreas.MapArea home = mapAreas.home(region);
-		if (home == null || (home.isSurface() && (shown == null || shown.isSurface())))
+		if (home == null || (home.isSurface() && onSurface))
 		{
 			// on the main map, or on no map we know: its tiles are its place
 			client.getWorldMap().setWorldMapPositionTarget(chunkCentre(region));
@@ -796,6 +800,21 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			{
 				message("NPC Permadeath: open the world map to see the chunk.");
 			}
+			return;
+		}
+		java.awt.Point entrance = home.isSurface() ? null : home.entranceFor(region);
+		if (entrance != null && onSurface)
+		{
+			client.getWorldMap().setWorldMapPositionTarget(new WorldPoint(entrance.x, entrance.y, 0));
+			message(open
+				? "NPC Permadeath: that chunk is in " + home.getName() + ". The map now shows its entrance."
+				: "NPC Permadeath: that chunk is in " + home.getName() + ". Open the world map to see its entrance.");
+			return;
+		}
+		if (entrance != null)
+		{
+			message("NPC Permadeath: that chunk is in " + home.getName()
+				+ ". Choose Gielinor Surface in the world map's list to see its entrance.");
 			return;
 		}
 		message(open
@@ -1004,12 +1023,22 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 	};
 
-	/** Snapshots the kill list on the client thread and hands it to the panel on the Swing thread. */
+	/**
+	 * Snapshots the kill list, or the search results while the panel shows a
+	 * search, on the client thread and hands it to the panel on the Swing thread.
+	 */
 	private void refreshPanel()
 	{
 		PermadeathPanel target = panel;
 		if (target == null)
 		{
+			return;
+		}
+		String query = searchQuery;
+		if (query != null)
+		{
+			PermadeathPanel.SearchResult result = searchResult(query);
+			SwingUtilities.invokeLater(() -> target.showSearch(result));
 			return;
 		}
 		Set<Integer> regions = new java.util.TreeSet<>();
@@ -1021,6 +1050,85 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		List<PermadeathPanel.Row> rows = new ArrayList<>();
 		regions.forEach(region -> rows.addAll(rowsFor(region)));
 		SwingUtilities.invokeLater(() -> target.update(rows));
+	}
+
+	// ---- NPC search ----------------------------------------------------------
+
+	/** The most searched NPC types whose wiki page one search asks for. */
+	private static final int SEARCH_WIKI_LOOKUPS = 10;
+
+	/** Starts a search from the panel, or ends it when the query is null. */
+	private void search(String query)
+	{
+		searchQuery = query;
+		refreshPanel();
+		if (query == null)
+		{
+			return;
+		}
+		// the wiki may know spawns the bundled data lacks; list them when they arrive
+		List<String> names = searchNames(query);
+		for (String name : names.subList(0, Math.min(names.size(), SEARCH_WIKI_LOOKUPS)))
+		{
+			totals.ensure(name, now(), () ->
+			{
+				if (query.equals(searchQuery))
+				{
+					refreshPanel();
+				}
+			});
+		}
+	}
+
+	/** The NPC names a search means, among every name with spawns or kills. */
+	private List<String> searchNames(String query)
+	{
+		// killed names first: the set keeps the first spelling, and kills are filed under the game's
+		Set<String> known = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+		tracker.killsByArea().keySet().forEach(area -> known.add(area.getName()));
+		known.addAll(learner.allNames());
+		return NpcSearch.namesFor(query, known);
+	}
+
+	/** Every chunk a searched NPC spawns in (bundled, observed or wiki) or was killed in. */
+	private PermadeathPanel.SearchResult searchResult(String query)
+	{
+		List<String> names = searchNames(query);
+		boolean moreNames = names.size() > NpcSearch.MAX_NAMES;
+		if (moreNames)
+		{
+			names = new ArrayList<>(names.subList(0, NpcSearch.MAX_NAMES));
+		}
+		Set<AreaKey> killed = tracker.killsByArea().keySet();
+		List<PermadeathPanel.Row> rows = new ArrayList<>();
+		for (String name : names)
+		{
+			Set<Integer> regions = new java.util.TreeSet<>(learner.regionsWith(name));
+			regions.addAll(totals.regionsWith(name));
+			for (AreaKey area : killed)
+			{
+				if (area.getName().equalsIgnoreCase(name))
+				{
+					regions.add(area.getRegion());
+				}
+			}
+			for (int region : regions)
+			{
+				AreaKey area = new AreaKey(name, region);
+				rows.add(new PermadeathPanel.Row(area, chunkHeading(area), tracker.kills(area), spawnTotal(area),
+					tracker.hiddenHere(area)));
+			}
+		}
+		rows = NpcSearch.order(rows);
+		// totals cover every chunk found, before the list is cut short
+		List<PermadeathPanel.Total> sums = NpcSearch.totals(names, rows);
+		int chunks = NpcSearch.chunks(rows);
+		boolean moreRows = rows.size() > NpcSearch.MAX_ROWS;
+		if (moreRows)
+		{
+			rows = new ArrayList<>(rows.subList(0, NpcSearch.MAX_ROWS));
+		}
+		return new PermadeathPanel.SearchResult(query, names, moreNames, sums, chunks, rows, moreRows);
 	}
 
 	private void announce(AreaKey area)

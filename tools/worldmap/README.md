@@ -23,6 +23,17 @@ list shows it. Each line after that is a rectangle of zones that share one
 offset: `x y width height dx dy` in game tiles. Map position `(x, y)` shows
 world tile `(x + dx, y + dy)`.
 
+`exit x y sx sy` lines say where an underground map is entered from the
+surface: world tile `(x, y)` on that map is reached from surface tile
+`(sx, sy)`. They come from the world map's intermap links, the dungeon and
+ladder icons that switch between maps, in either direction.
+
+Some maps have no surface link of their own. Dorgesh-Kaan, for example, is
+reached through the Lumbridge caves. Such a map gets the entrance of the map
+it links to, up to three maps away. Maps the game links to nothing get no
+entrance. The generator lists them, among them The Abyss, Lassar Undercity
+and Ghorrock Prison.
+
 ## Regenerate
 
 This is a standalone Gradle project. The plugin build doesn't include it, and

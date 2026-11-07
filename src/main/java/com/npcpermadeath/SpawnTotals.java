@@ -6,9 +6,11 @@ import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.HashMap;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -155,6 +157,13 @@ class SpawnTotals
 			}
 		}
 		return regionLabels.get(region);
+	}
+
+	/** Every chunk the wiki pins the NPC in, from what has been fetched so far. */
+	Set<Integer> regionsWith(String name)
+	{
+		Cached cached = cache.get(name);
+		return cached == null ? Collections.emptySet() : new TreeSet<>(cached.byRegion.keySet());
 	}
 
 	boolean isKnown(String name)
