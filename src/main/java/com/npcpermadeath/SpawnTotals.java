@@ -42,9 +42,17 @@ class SpawnTotals
 	private static final Pattern LINK = Pattern.compile("\\[\\[([^\\]|]*)(?:\\|([^\\]]*))?\\]\\]");
 	private static final int MAX_REDIRECTS = 2;
 
+	/**
+	 * Bumped when parsing changes what a page yields. 2: underground pins
+	 * (any mapID) count; format 1 kept only the surface (mapID 0).
+	 */
+	static final int FORMAT = 2;
+
 	static class Cached
 	{
 		long fetched;
+		/** {@link #FORMAT} when stored; 0 in entries from before it existed. */
+		int format;
 		Map<Integer, Integer> byRegion = new HashMap<>();
 		Map<Integer, String> labelByRegion = new HashMap<>();
 	}
@@ -86,9 +94,14 @@ class SpawnTotals
 
 	void load()
 	{
+		load(configManager.getConfiguration(NpcPermadeathConfig.GROUP, KEY));
+	}
+
+	/** Replaces what is known with the stored JSON cache, or with nothing when it is null. */
+	void load(String json)
+	{
 		cache.clear();
 		regionLabels.clear();
-		String json = configManager.getConfiguration(NpcPermadeathConfig.GROUP, KEY);
 		if (json == null)
 		{
 			return;
@@ -100,8 +113,8 @@ class SpawnTotals
 			{
 				stored.forEach((name, cached) ->
 				{
-					// Entries without labels come from an older format; drop them so they are fetched again.
-					if (cached != null && cached.byRegion != null && cached.labelByRegion != null)
+					// Entries from an older format are dropped so they are fetched again.
+					if (cached != null && cached.format == FORMAT && cached.byRegion != null && cached.labelByRegion != null)
 					{
 						cache.put(name, cached);
 						regionLabels.putAll(cached.labelByRegion);
@@ -154,6 +167,7 @@ class SpawnTotals
 	{
 		Cached fresh = new Cached();
 		fresh.fetched = now;
+		fresh.format = FORMAT;
 		fresh.byRegion = spawns.byRegion;
 		fresh.labelByRegion = spawns.labels();
 		cache.put(name, fresh);
@@ -284,8 +298,9 @@ class SpawnTotals
 
 	private static void parseLocLine(String body, PageSpawns spawns)
 	{
+		// Every mapID counts: the wiki pins dungeons and other map areas at their real
+		// game coordinates, the same tiles the NPCs stand on.
 		String location = null;
-		int mapId = 0;
 		Map<Integer, Integer> pins = new TreeMap<>();
 		for (String part : splitParams(body))
 		{
@@ -299,17 +314,6 @@ class SpawnTotals
 				{
 					location = cleanLabel(value);
 				}
-				else if (key.equals("mapID"))
-				{
-					try
-					{
-						mapId = Integer.parseInt(value);
-					}
-					catch (NumberFormatException ignored)
-					{
-						mapId = -1;
-					}
-				}
 				continue;
 			}
 			Matcher pin = PIN.matcher(p);
@@ -317,12 +321,11 @@ class SpawnTotals
 			{
 				int x = Integer.parseInt(pin.group(1));
 				int y = Integer.parseInt(pin.group(2));
-				pins.merge(((x >> 6) << 8) | (y >> 6), 1, Integer::sum);
+				if (x >= 0 && y >= 0 && x < 16384 && y < 16384)
+				{
+					pins.merge(((x >> 6) << 8) | (y >> 6), 1, Integer::sum);
+				}
 			}
-		}
-		if (mapId != 0)
-		{
-			return;
 		}
 		for (Map.Entry<Integer, Integer> e : pins.entrySet())
 		{

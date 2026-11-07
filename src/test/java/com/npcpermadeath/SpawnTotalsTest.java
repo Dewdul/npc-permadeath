@@ -18,7 +18,8 @@ public class SpawnTotalsTest
 			+ "{{LocLine\n|name = Goblin\n|location = [[Lumbridge]]\n|levels = 2\n|members = n\n|mapID = 0\n|plane = 0\n"
 			+ "|x:3245,y:3245|x:3250,y:3230|x:3100,y:3100\n|mtype = pin\n}}\n"
 			+ "{{LocLine|name = Goblin|location = Between [[Lumbridge]] and [[Varrock|the city]]|mapID = 0|plane = 0|x:3259,y:3338|mtype = pin}}\n"
-			+ "{{LocLine|name = Goblin|location = [[Goblin Cave]]|mapID = 2|x:3245,y:3245}}\n"
+			+ "{{LocLine|name = Goblin|location = [[Goblin Cave]]|mapID = 2|x:2580,y:9850|x:2581,y:9851}}\n"
+			+ "{{LocLine|name = Goblin|location = [[Nowhere]]|x:-5,y:3245}}\n"
 			+ "{{LocTableBottom}}";
 
 		SpawnTotals.PageSpawns spawns = SpawnTotals.parse(page);
@@ -26,10 +27,34 @@ public class SpawnTotalsTest
 		assertEquals(Integer.valueOf(2), spawns.byRegion.get(LUMBRIDGE));
 		assertEquals(Integer.valueOf(1), spawns.byRegion.get(((3100 >> 6) << 8) | (3100 >> 6)));
 		assertEquals(Integer.valueOf(1), spawns.byRegion.get(((3259 >> 6) << 8) | (3338 >> 6)));
-		assertEquals(3, spawns.byRegion.size());
+		// an underground map's pins are real game tiles too; off-world pins are dropped
+		int cave = ((2580 >> 6) << 8) | (9850 >> 6);
+		assertEquals(Integer.valueOf(2), spawns.byRegion.get(cave));
+		assertEquals(4, spawns.byRegion.size());
 		Map<Integer, String> labels = spawns.labels();
 		assertEquals("Lumbridge", labels.get(LUMBRIDGE));
 		assertEquals("Between Lumbridge and the city", labels.get(((3259 >> 6) << 8) | (3338 >> 6)));
+		assertEquals("Goblin Cave", labels.get(cave));
+	}
+
+	@Test
+	public void entriesParsedTheOldWayAreFetchedAgain()
+	{
+		SpawnTotals.Cached old = new SpawnTotals.Cached();
+		old.fetched = 1;
+		SpawnTotals.Cached current = new SpawnTotals.Cached();
+		current.fetched = 1;
+		current.format = SpawnTotals.FORMAT;
+		com.google.gson.Gson gson = new com.google.gson.Gson();
+		Map<String, SpawnTotals.Cached> stored = new java.util.HashMap<>();
+		stored.put("Goblin", old);
+		stored.put("Cow", current);
+		SpawnTotals totals = new SpawnTotals(null, gson, null, null);
+
+		totals.load(gson.toJson(stored));
+
+		assertTrue(totals.isKnown("Cow"));
+		assertTrue(!totals.isKnown("Goblin"));
 	}
 
 	@Test
