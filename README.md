@@ -47,7 +47,12 @@ they always agree.
 
 On the world map every chunk with known NPCs is outlined: green if nothing
 there has been killed, orange if something has, red if every NPC type in it
-is gone. Hover a chunk for the full list with kills and totals.
+is gone. Hover a chunk for the full list with kills and totals. This also
+works on the underground maps. Many of those draw parts of a dungeon away
+from their real place: the Waterbirth Dungeon map shows the Dagannoth Kings'
+lair beside the island's caves. Chunks there are outlined where the map
+draws them. Clicking a panel heading for a chunk on a map other than the
+open one names the map to choose.
 
 Kills are credited to the chunk the NPC spawns in. One killed in a chunk it
 does not spawn in, or in a chunk whose spawns are all already dead, wandered

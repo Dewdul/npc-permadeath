@@ -136,6 +136,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	private NavigationButton navButton;
 	private ChunkMapOverlay mapOverlay;
 	private ChunkPanelOverlay panelOverlay;
+	/** The world map's maps and where each draws the world. */
+	private MapAreas mapAreas = MapAreas.empty();
 	/** Map chunk the player is standing in, for the panel. */
 	private int currentRegion = -1;
 
@@ -185,7 +187,8 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
-		mapOverlay = new ChunkMapOverlay(this, client, chunkSource);
+		mapAreas = loadMapAreas();
+		mapOverlay = new ChunkMapOverlay(this, client, chunkSource, mapAreas);
 		panelOverlay = new ChunkPanelOverlay(this, mapOverlay);
 		overlayManager.add(mapOverlay);
 		overlayManager.add(panelOverlay);
@@ -767,14 +770,37 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 		}
 	}
 
+	/**
+	 * Centres the world map on the chunk. An underground map may draw the
+	 * chunk away from its real tiles, so the map is moved to where it is
+	 * drawn. The client cannot switch maps for us, so a chunk on another map
+	 * than the open one gets a message naming the map to choose.
+	 */
 	private void showOnMap(int region)
 	{
-		client.getWorldMap().setWorldMapPositionTarget(chunkCentre(region));
 		Widget map = client.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
-		if (map == null || map.isHidden())
+		boolean open = map != null && !map.isHidden();
+		MapAreas.MapArea shown = open ? mapAreas.named(MapAreas.openMapName(client)) : null;
+		if (shown != null && !shown.isSurface() && shown.shows(region))
 		{
-			message("NPC Permadeath: open the world map to see the chunk.");
+			java.awt.Point at = shown.footprints().get(region).centre();
+			client.getWorldMap().setWorldMapPositionTarget(new WorldPoint(at.x, at.y, 0));
+			return;
 		}
+		MapAreas.MapArea home = mapAreas.home(region);
+		if (home == null || (home.isSurface() && (shown == null || shown.isSurface())))
+		{
+			// on the main map, or on no map we know: its tiles are its place
+			client.getWorldMap().setWorldMapPositionTarget(chunkCentre(region));
+			if (!open)
+			{
+				message("NPC Permadeath: open the world map to see the chunk.");
+			}
+			return;
+		}
+		message(open
+			? "NPC Permadeath: that chunk is on the " + home.getName() + " map; choose it in the world map's list."
+			: "NPC Permadeath: open the world map and choose " + home.getName() + " to see the chunk.");
 	}
 
 	private void forgetArea(AreaKey area)
@@ -1278,6 +1304,24 @@ public class NpcPermadeathPlugin extends Plugin implements RenderCallback
 	}
 
 	/** The boss names in a bosses.txt stream, in display case as written. */
+	private MapAreas loadMapAreas()
+	{
+		try (InputStream in = getClass().getResourceAsStream(MapAreas.RESOURCE))
+		{
+			if (in == null)
+			{
+				log.warn("{} is missing; underground world maps will be outlined as if drawn in place", MapAreas.RESOURCE);
+				return MapAreas.empty();
+			}
+			return MapAreas.parse(new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)));
+		}
+		catch (IOException e)
+		{
+			log.warn("Could not read {}", MapAreas.RESOURCE, e);
+			return MapAreas.empty();
+		}
+	}
+
 	private static List<String> loadBosses(InputStream source)
 	{
 		List<String> names = new ArrayList<>();

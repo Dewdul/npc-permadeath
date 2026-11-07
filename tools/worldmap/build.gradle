@@ -1,0 +1,37 @@
+// Writes src/main/resources/com/npcpermadeath/worldmap_areas.txt from the OSRS game cache.
+// NOT part of the plugin build: the root settings.gradle does not include it, and nothing
+// here is shipped except the text file it writes. Run from the repo root:
+//   ./gradlew -p tools/worldmap generate -Pcache=<disk cache directory>
+plugins {
+	id 'java'
+}
+
+repositories {
+	maven {
+		url = 'https://repo.runelite.net'
+		content {
+			includeGroupByRegex("net\\.runelite.*")
+		}
+	}
+	mavenCentral()
+}
+
+dependencies {
+	implementation group: 'net.runelite', name: 'cache', version: '1.13.1'
+	implementation 'org.slf4j:slf4j-simple:1.7.25'
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+}
+
+tasks.register('generate', JavaExec) {
+	group = 'application'
+	description = 'Writes the world map area table from an OSRS disk cache'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.npcpermadeath.worldmap.WorldMapTable'
+	def cacheDir = project.findProperty('cache') ?: "${projectDir}/cache"
+	def out = project.findProperty('out') ?: "${rootDir}/../../src/main/resources/com/npcpermadeath/worldmap_areas.txt"
+	def source = project.findProperty('source') ?: 'an OSRS disk cache'
+	args cacheDir, out, source
+}
