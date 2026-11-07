@@ -259,6 +259,13 @@ class ChunkMapOverlay extends Overlay
 		}
 	}
 
+	/** Whether the world map is open now, so the hover from its last frame still applies. */
+	boolean isMapOpen()
+	{
+		Widget map = client.getWidget(InterfaceID.Worldmap.MAP_CONTAINER);
+		return map != null && !map.isHidden();
+	}
+
 	int getHoveredRegion()
 	{
 		return hoveredRegion;

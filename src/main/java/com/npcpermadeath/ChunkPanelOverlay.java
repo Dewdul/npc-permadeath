@@ -42,7 +42,9 @@ class ChunkPanelOverlay extends Overlay
 		int region = mapOverlay.getHoveredRegion();
 		Rectangle chunk = mapOverlay.getHoveredRect();
 		Rectangle bounds = mapOverlay.getMapBounds();
-		if (region < 0 || chunk == null || bounds == null)
+		// The map overlay is only drawn while the world map is open, so after the map
+		// closes its last hover stays behind; it must not keep this panel on screen.
+		if (region < 0 || chunk == null || bounds == null || !mapOverlay.isMapOpen())
 		{
 			return null;
 		}
